@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Variables and types — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="03-variables-types.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Variables and types</h1>
+  <p class="lead">Java's type system is the thing that catches your mistakes. Learn what the types are, how values are
+     stored, and where beginners get burned.</p>
+
+  <h2>Declaring a variable</h2>
+  <pre><code>int count = 10;                 // type, name, value
+String name = "Ada";
+final double TAX_RATE = 0.19;   // final = cannot be reassigned</code></pre>
+  <p>A variable must be assigned before it is read. Local variables get no default value — the compiler rejects
+     <code>int x; System.out.println(x);</code>.</p>
+
+  <h2>The eight primitive types</h2>
+  <p>Primitives are not objects. They hold a raw value directly, have a fixed size, and can never be <code>null</code>.</p>
+  <table>
+    <tr><th>Type</th><th>Size</th><th>Range / meaning</th><th>Default</th><th>Literal</th></tr>
+    <tr><td><code>byte</code></td><td>8 bit</td><td>−128 … 127</td><td>0</td><td><code>(byte) 12</code></td></tr>
+    <tr><td><code>short</code></td><td>16 bit</td><td>−32 768 … 32 767</td><td>0</td><td><code>(short) 12</code></td></tr>
+    <tr><td><code>int</code></td><td>32 bit</td><td>≈ ±2.1 billion</td><td>0</td><td><code>42</code></td></tr>
+    <tr><td><code>long</code></td><td>64 bit</td><td>≈ ±9.2 × 10<sup>18</sup></td><td>0L</td><td><code>42L</code></td></tr>
+    <tr><td><code>float</code></td><td>32 bit</td><td>approximate decimals</td><td>0.0f</td><td><code>3.14f</code></td></tr>
+    <tr><td><code>double</code></td><td>64 bit</td><td>approximate decimals</td><td>0.0</td><td><code>3.14</code></td></tr>
+    <tr><td><code>char</code></td><td>16 bit</td><td>a single UTF-16 code unit</td><td><code>'\u0000'</code></td><td><code>'A'</code></td></tr>
+    <tr><td><code>boolean</code></td><td>—</td><td><code>true</code> / <code>false</code></td><td>false</td><td><code>true</code></td></tr>
+  </table>
+  <p>In practice you will use <code>int</code>, <code>long</code>, <code>double</code> and <code>boolean</code> almost
+     exclusively. Use <code>int</code> unless the number can exceed two billion (ids, timestamps in milliseconds,
+     money in minor units → <code>long</code>).</p>
+
+  <h3>Readable numeric literals</h3>
+  <pre><code>int million   = 1_000_000;   // underscores are ignored by the compiler
+int hex       = 0xFF;        // 255
+int binary    = 0b1010;      // 10
+long big      = 9_000_000_000L;   // L required: without it the literal is an int and overflows</code></pre>
+
+  <h2>Reference types</h2>
+  <p>Everything that is not a primitive is a <strong>reference</strong>: <code>String</code>, arrays, your own classes,
+     collections. The variable holds an address pointing to an object on the heap, and can be <code>null</code>.</p>
+  <pre><code>String a = "hello";     // a refers to a String object
+String b = null;        // b refers to nothing
+int len = b.length();   // NullPointerException at runtime</code></pre>
+  <div class="warn">
+    <strong>NullPointerException</strong>
+    The most common runtime error in Java. It means you called a method or read a field on a reference that was
+    <code>null</code>. Java 14+ tells you exactly which part of the expression was null — read the message carefully.
+    Lesson 17 covers <code>Optional</code> as a way of designing the problem away.
+  </div>
+
+  <h3>Wrapper classes</h3>
+  <p>Each primitive has an object counterpart, needed anywhere an object is required (collections, generics, nullable
+     values):</p>
+  <table>
+    <tr><td><code>int</code> → <code>Integer</code></td><td><code>long</code> → <code>Long</code></td>
+        <td><code>double</code> → <code>Double</code></td><td><code>boolean</code> → <code>Boolean</code></td></tr>
+    <tr><td><code>char</code> → <code>Character</code></td><td><code>byte</code> → <code>Byte</code></td>
+        <td><code>short</code> → <code>Short</code></td><td><code>float</code> → <code>Float</code></td></tr>
+  </table>
+  <pre><code>List&lt;Integer&gt; numbers = new ArrayList&lt;&gt;();
+numbers.add(5);                   // autoboxing: int 5 → Integer.valueOf(5)
+int first = numbers.get(0);       // unboxing: Integer → int</code></pre>
+  <p>Two traps come with wrappers:</p>
+  <pre><code>Integer x = 127, y = 127;
+System.out.println(x == y);       // true  — small Integers are cached
+Integer p = 1000, q = 1000;
+System.out.println(p == q);       // false — different objects!
+System.out.println(p.equals(q));  // true  — compare values with equals
+
+Integer maybe = null;
+int value = maybe;                // NullPointerException on unboxing</code></pre>
+  <p>Rule: <strong>compare objects with <code>equals</code>, never with <code>==</code></strong>. <code>==</code> on
+     references asks "is this the same object", which is almost never the question you mean.</p>
+
+  <h2>Stack, heap and what assignment copies</h2>
+  <pre><code>int a = 5;
+int b = a;      // b is a copy; changing b never affects a
+b = 9;          // a is still 5
+
+int[] xs = {1, 2, 3};
+int[] ys = xs;  // ys copies the *reference*, not the array
+ys[0] = 99;     // xs[0] is now 99 as well — one array, two names</code></pre>
+  <p>Primitives are copied by value; references are copied by value too, but the value <em>is</em> an address. Two
+     variables can therefore point at the same object.</p>
+
+  <h2>Conversion and casting</h2>
+  <pre><code>// widening — automatic, no data lost
+int i = 100;
+long l = i;
+double d = l;
+
+// narrowing — explicit cast, data may be lost
+double price = 9.99;
+int rounded = (int) price;      // 9   (truncates, does not round)
+int big = 300;
+byte small = (byte) big;        // 44  (overflow, silently)</code></pre>
+
+  <h3>Integer division and overflow</h3>
+  <pre><code>System.out.println(7 / 2);        // 3   — both operands are int
+System.out.println(7 / 2.0);      // 3.5 — one operand is double
+System.out.println(Integer.MAX_VALUE + 1);  // -2147483648, wraps around silently</code></pre>
+
+  <h3>Floating point is approximate</h3>
+  <pre><code>System.out.println(0.1 + 0.2);            // 0.30000000000000004
+System.out.println(0.1 + 0.2 == 0.3);     // false</code></pre>
+  <p>Never use <code>double</code> for money. Use <code>BigDecimal</code>, or store amounts as whole cents in a
+     <code>long</code>:</p>
+  <pre><code>BigDecimal total = new BigDecimal("19.99").multiply(BigDecimal.valueOf(3));
+// construct from a String, not from a double, or you inherit the imprecision</code></pre>
+
+  <h2>Strings between types</h2>
+  <pre><code>String s = String.valueOf(42);         // "42"
+String t = 42 + "";                    // works, but valueOf reads better
+int n = Integer.parseInt("42");        // 42  — throws NumberFormatException on bad input
+double d = Double.parseDouble("3.14");
+boolean b = Boolean.parseBoolean("true");</code></pre>
+
+  <h2>var: inferred local types</h2>
+  <p>Since Java 10 the compiler can infer the type of a <em>local variable</em> from its initialiser. The variable is
+     still statically typed — this is not JavaScript's <code>var</code>.</p>
+  <pre><code>var message = "hello";                      // String
+var totals = new HashMap&lt;String, Integer&gt;(); // HashMap&lt;String, Integer&gt;
+var count = 0;                               // int
+
+var x;              // error: no initialiser, nothing to infer
+var y = null;       // error</code></pre>
+  <p>Use <code>var</code> when the type is obvious from the right-hand side and the line gets shorter. Avoid it when it
+     hides information: <code>var result = service.process(input);</code> tells a reader nothing.</p>
+
+  <h2>final</h2>
+  <pre><code>final int limit = 10;
+limit = 11;                          // compile error
+
+final List&lt;String&gt; names = new ArrayList&lt;&gt;();
+names.add("Ada");                    // fine — the *reference* is final, not the object
+names = new ArrayList&lt;&gt;();           // compile error</code></pre>
+  <p>Marking fields and parameters <code>final</code> by default is a good habit: it documents that nothing reassigns
+     them and prevents a class of bugs.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>In <code>jshell</code>, print the maximum and minimum of each integer type
+          (<code>Integer.MAX_VALUE</code>, <code>Long.MIN_VALUE</code>, …).</li>
+      <li>Write a program that reads two numbers from <code>args</code>, divides them, and prints both the integer
+          division and the decimal division.</li>
+      <li>Show the <code>Integer</code> caching surprise: two variables at 127 and two at 1000, compared with
+          <code>==</code> and with <code>equals</code>.</li>
+      <li>Compute <code>0.1 + 0.2</code> with <code>double</code> and again with <code>BigDecimal</code>. Print both.</li>
+      <li>Take a <code>double</code> temperature and convert it to a whole-degree <code>int</code> two ways: casting and
+          <code>Math.round</code>. Explain the difference for <code>-2.5</code>.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

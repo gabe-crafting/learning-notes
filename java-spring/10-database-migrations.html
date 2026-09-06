@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Databases and migrations — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="10-database-migrations.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Databases and migrations</h1>
+  <p class="lead">Running a real database locally, and changing its schema in a way that works for the whole team and
+     for production.</p>
+
+  <h2>Postgres with Docker Compose</h2>
+  <pre><code># compose.yaml at the project root
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: tasks
+      POSTGRES_USER: tasks
+      POSTGRES_PASSWORD: tasks
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:</code></pre>
+  <pre><code>docker compose up -d          # start
+docker compose logs -f db     # watch
+docker compose down           # stop
+docker compose down -v        # stop and delete the data volume</code></pre>
+  <p>Spring Boot 3.1+ can even start it for you: add <code>spring-boot-docker-compose</code> and the app boots the
+     compose file and wires the datasource automatically during development.</p>
+
+  <h3>Connecting</h3>
+  <pre><code>spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/tasks
+    username: tasks
+    password: tasks
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false</code></pre>
+
+  <h3>H2 for quick experiments</h3>
+  <pre><code>spring:
+  datasource:
+    url: jdbc:h2:mem:testdb
+  h2:
+    console:
+      enabled: true       # browse at /h2-console</code></pre>
+  <p>Fine for a first afternoon and for some tests, but H2 is not Postgres: different types, different SQL dialect,
+     different constraint behaviour. Develop against the database you deploy against — Testcontainers (lesson 12) makes
+     that easy.</p>
+
+  <h2>Why migrations</h2>
+  <p><code>ddl-auto: update</code> looks convenient and then:</p>
+  <ul>
+    <li>It never drops or renames anything — your schema silently accumulates dead columns.</li>
+    <li>It cannot express a data change ("split <code>name</code> into <code>first</code> and <code>last</code>").</li>
+    <li>It is not reviewable: nobody can see in a pull request what will happen to the production schema.</li>
+    <li>It is not reproducible — the result depends on what the schema happened to be already.</li>
+  </ul>
+  <p>Migrations put the schema in version control as ordered, immutable SQL scripts, applied exactly once, in order, on
+     every environment.</p>
+
+  <h2>Flyway</h2>
+  <pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+    &lt;artifactId&gt;flyway-core&lt;/artifactId&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+    &lt;groupId&gt;org.flywaydb&lt;/groupId&gt;
+    &lt;artifactId&gt;flyway-database-postgresql&lt;/artifactId&gt;
+&lt;/dependency&gt;</code></pre>
+  <pre><code>src/main/resources/db/migration/
+├── V1__create_tasks_table.sql
+├── V2__add_project_table.sql
+├── V3__add_due_date_index.sql
+└── V4__backfill_status.sql</code></pre>
+  <p>Naming: <code>V</code> + version + <code>__</code> (two underscores) + description. Flyway runs pending scripts at
+     startup, in order, and records each one in a <code>flyway_schema_history</code> table.</p>
+  <pre><code>-- V1__create_tasks_table.sql
+create table tasks (
+    id          bigserial primary key,
+    title       varchar(200) not null,
+    description text,
+    status      varchar(20)  not null default 'TODO',
+    due_date    date,
+    created_at  timestamptz  not null default now(),
+    version     bigint       not null default 0
+);
+
+create index idx_tasks_status on tasks (status);
+create index idx_tasks_due_date on tasks (due_date) where due_date is not null;</code></pre>
+  <pre><code>-- V2__add_project_table.sql
+create table projects (
+    id   bigserial primary key,
+    name varchar(200) not null unique
+);
+
+alter table tasks add column project_id bigint references projects (id);
+create index idx_tasks_project_id on tasks (project_id);</code></pre>
+  <div class="warn">
+    <strong>Never edit an applied migration</strong>
+    Flyway stores a checksum. Changing <code>V1</code> after it has run anywhere fails the next startup with a
+    validation error. Fix mistakes by adding <code>V5</code>.
+  </div>
+
+  <h3>Configuration</h3>
+  <pre><code>spring:
+  flyway:
+    enabled: true
+    baseline-on-migrate: true      # for an existing database that predates Flyway
+    locations: classpath:db/migration
+  jpa:
+    hibernate:
+      ddl-auto: validate           # Hibernate checks the schema matches the entities, changes nothing</code></pre>
+  <p>That pairing — Flyway owns the schema, Hibernate validates it — is the standard production setup. If an entity and
+     the schema disagree, the application refuses to start, which is exactly when you want to find out.</p>
+
+  <h3>Liquibase</h3>
+  <p>The main alternative, using XML/YAML changesets instead of raw SQL, with built-in rollback support. Same idea;
+     pick whichever the team uses. Flyway is simpler and more common in Boot projects.</p>
+
+  <h2>Writing migrations safely</h2>
+  <table>
+    <tr><th>Change</th><th>Safe approach</th></tr>
+    <tr><td>Add a column</td><td>Add it nullable, or with a default. Adding <code>not null</code> without a default to a
+        populated table fails.</td></tr>
+    <tr><td>Rename a column</td><td>Add new → backfill → switch the code → drop old, across several releases.</td></tr>
+    <tr><td>Drop a column</td><td>Only after no deployed version still reads it.</td></tr>
+    <tr><td>Add an index</td><td>On a big table use <code>create index concurrently</code> (outside a transaction).</td></tr>
+    <tr><td>Change a type</td><td>New column, backfill, swap. In-place changes lock the table.</td></tr>
+  </table>
+  <p>The principle: a migration must be compatible with both the old and the new version of the application, because
+     during a rolling deploy both are running.</p>
+
+  <h2>Seed and reference data</h2>
+  <pre><code>-- V5__seed_default_tags.sql
+insert into tags (name) values ('home'), ('work'), ('urgent')
+on conflict (name) do nothing;         -- idempotent</code></pre>
+  <p>Reference data belongs in migrations. Demo data belongs in a <code>dev</code>-profile
+     <code>CommandLineRunner</code> or a separate script — never in a migration that also runs in production.</p>
+
+  <h2>Indexes, briefly</h2>
+  <ul>
+    <li>Index every foreign key you query by, and every column used in a <code>where</code> or <code>order by</code>
+        on a large table.</li>
+    <li>A composite index <code>(status, due_date)</code> serves queries filtering on <code>status</code> alone, but not
+        on <code>due_date</code> alone — leading columns matter.</li>
+    <li>Indexes cost write throughput and disk. Do not index everything.</li>
+    <li>Measure with <code>explain analyze select ...</code> in psql before and after.</li>
+  </ul>
+
+  <h2>Useful psql</h2>
+  <pre><code>docker compose exec db psql -U tasks -d tasks
+
+\dt                      list tables
+\d tasks                 describe a table, with indexes and constraints
+\di                      list indexes
+select * from flyway_schema_history;
+explain analyze select * from tasks where status = 'TODO';
+\q</code></pre>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Start Postgres with Docker Compose and point your app at it.</li>
+      <li>Add Flyway, write <code>V1</code> creating your tables, and set <code>ddl-auto: validate</code>.</li>
+      <li>Add a column via <code>V2</code>, restart, and inspect <code>flyway_schema_history</code>.</li>
+      <li>Deliberately edit <code>V1</code> after it ran, read the checksum error, then revert it.</li>
+      <li>Make an entity field disagree with the schema and watch startup validation fail.</li>
+      <li>Write a migration that renames a column safely across three steps, and describe which release each step goes
+          in.</li>
+      <li>Add an index for your most common query and compare <code>explain analyze</code> before and after.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

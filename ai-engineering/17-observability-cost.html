@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Observability, latency and cost — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="17-observability-cost.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Observability, latency and cost</h1>
+  <p class="lead">Three properties of the same system. You cannot manage any of them without measuring, and measuring
+     LLM systems needs slightly different plumbing than ordinary services.</p>
+
+  <h2>What to log for every model call</h2>
+  <pre><code>{
+  "trace_id": "req_8f2a",           "span_id": "llm_3",
+  "user_id": "u_412",               "tenant": "acme",
+  "feature": "rag_answer",          "prompt_version": "rag_answer.v2",
+  "model": "claude-opus-5",
+  "input_tokens": 5840,             "output_tokens": 312,
+  "cache_read_tokens": 5100,        "cache_creation_tokens": 0,
+  "cost_usd": 0.0141,
+  "latency_ms": 2140,               "time_to_first_token_ms": 480,
+  "stop_reason": "end_turn",
+  "retrieved_ids": ["doc42:7", "doc12:3"],
+  "outcome": "answered",            "feedback": null,
+  "message_id": "msg_01ABC..."
+}</code></pre>
+  <p>The unusual fields compared with normal service logging are the token counts, the cache hit numbers, the prompt
+     version and the retrieved ids. Together they let you answer the four questions you will actually be asked: why is
+     it slow, why is it expensive, why did it answer that, and did last week's change help.</p>
+  <div class="warn">
+    <strong>Decide your policy on logging prompt content</strong>
+    Prompts and outputs contain user data. Logging them makes debugging possible and creates a privacy liability. Common
+    compromise: log content in development, and in production log hashes, lengths and metadata by default, with
+    full-content capture enabled for a sampled percentage, redacted, with a short retention. Never log secrets or the
+    API key, and make sure your tracing vendor's retention matches your privacy policy.
+  </div>
+
+  <h2>Tracing</h2>
+  <p>One user request may involve a rewrite call, an embedding, a search, a rerank and a generation. A flat log line per
+     call cannot show you which of those was slow. Traces nest spans under one request.</p>
+  <pre><code>trace: POST /api/ask  (3,180 ms, $0.0182)
+├── span rewrite_query      210 ms   $0.0002   claude-haiku-4-5
+├── span embed_query         40 ms   $0.0000
+├── span vector_search       28 ms
+├── span rerank             240 ms
+└── span generate         2,610 ms   $0.0180   claude-opus-5   ttft 480 ms</code></pre>
+  <p>Tooling: <strong>Langfuse</strong> (open source, self-hostable), <strong>LangSmith</strong>,
+     <strong>Phoenix/Arize</strong>, <strong>Braintrust</strong>, <strong>Helicone</strong>, or plain OpenTelemetry into
+     whatever you already run. The specific tool matters less than having one before you need it — the day a customer
+     says "it gave me a wrong answer this morning" you want the trace, not a shrug.</p>
+  <pre><code># the pattern, with any tracer
+with tracer.span("rag_answer", user=user_id, prompt_version="v2") as span:
+    with tracer.span("retrieve"):
+        sources = retrieve(question)
+    with tracer.span("generate") as gen:
+        response = client.messages.create(...)
+        gen.set(input_tokens=response.usage.input_tokens,
+                output_tokens=response.usage.output_tokens,
+                cost_usd=cost(response.usage))
+    span.set(sources=[s.chunk_id for s in sources], outcome="answered")</code></pre>
+
+  <h2>Latency</h2>
+  <pre><code>total ≈ your overhead + retrieval + queue + prompt processing + generation
+                                                  ↑ input tokens    ↑ output tokens (dominant)</code></pre>
+  <ul>
+    <li><strong>Stream.</strong> Time to first token is what users perceive. A 3-second streamed answer feels faster
+        than a 1.5-second blocking one.</li>
+    <li><strong>Shorten the output.</strong> The most effective real lever. Ask for 100 words instead of 400 and you
+        have halved the time and the output cost.</li>
+    <li><strong>Parallelise</strong> independent calls; never await three things in sequence that do not depend on each
+        other.</li>
+    <li><strong>Use a smaller model</strong> for the fast paths — routing, rewriting, classification.</li>
+    <li><strong>Lower the effort</strong> setting where the extra reasoning is not buying accuracy.</li>
+    <li><strong>Cache</strong> — both the prompt prefix and whole answers.</li>
+    <li><strong>Do work ahead of time</strong>: pre-compute embeddings, pre-warm caches, precompute summaries at
+        ingestion rather than per query.</li>
+    <li><strong>Show progress</strong> for genuinely long agent runs — a visible step list beats a spinner.</li>
+  </ul>
+  <p>Track p50 and p95, per feature. The p95 is where your angriest users live.</p>
+
+  <h2>Cost</h2>
+  <h3>Know where it goes before optimising</h3>
+  <pre><code>SELECT feature, model,
+       count(*)                    AS calls,
+       sum(input_tokens)           AS in_tokens,
+       sum(output_tokens)          AS out_tokens,
+       round(sum(cost_usd), 2)     AS usd
+FROM llm_calls
+WHERE created_at &gt; now() - interval '7 days'
+GROUP BY feature, model
+ORDER BY usd DESC;</code></pre>
+  <p>Almost always, one or two features dominate. Optimise those; ignore the rest.</p>
+
+  <h3>The levers, cheapest first</h3>
+  <ol>
+    <li><strong>Prompt caching.</strong> Free quality, large saving on any repeated prefix — long system prompts, fixed
+        tool lists, a document you ask many questions about. Verify hits rather than assuming them.</li>
+    <li><strong>Send less.</strong> Trim the system prompt, retrieve fewer chunks, shrink tool results, stop resending
+        history you have already summarised. Input tokens are paid on every turn.</li>
+    <li><strong>Generate less.</strong> Output costs several times input. Set sane <code>max_tokens</code>, ask for
+        concise formats, use short JSON field names at volume.</li>
+    <li><strong>Batch API</strong> for anything not interactive — typically around half price for asynchronous
+        processing.</li>
+    <li><strong>Answer caching</strong> for repeated questions.</li>
+    <li><strong>Effort tuning</strong>: drop routine paths to lower effort and measure whether quality holds.</li>
+    <li><strong>Model routing</strong>: cheap model for easy work, strong model for hard work.</li>
+  </ol>
+  <p>The first five cost you nothing in quality. Only then start trading.</p>
+
+  <h3>Routing, done honestly</h3>
+  <pre><code>class Difficulty(BaseModel):
+    level: Literal["simple", "complex"]
+
+def answer(question: str) -> str:
+    level = classify(question, output_format=Difficulty).level      # haiku, ~$0.0001
+    model = "claude-haiku-4-5" if level == "simple" else "claude-opus-5"
+    return generate(question, model=model)</code></pre>
+  <p>Two warnings. First, measure the router — a wrong route sends a hard question to a weak model and produces a bad
+     answer plus a retry, which is more expensive than never routing. Second, caches are model-scoped, so a cascade
+     forfeits cache reuse across models; sometimes the strong model at low effort beats routing outright. Measure both.</p>
+
+  <h3>Semantic answer caching</h3>
+  <pre><code>def cached_answer(question: str, tenant: str) -> str | None:
+    vector = embed_query(question)
+    hit = cache.nearest(vector, tenant=tenant, min_similarity=0.95, max_age_hours=24)
+    return hit.answer if hit else None</code></pre>
+  <p>Effective on FAQ-shaped traffic where many users ask the same thing differently. Set the threshold high — a
+     similar-but-not-identical question served a cached answer is a bug users notice — scope by tenant and permissions,
+     and expire aggressively when the underlying documents change.</p>
+
+  <h2>Budgets and guardrails</h2>
+  <pre><code>MAX_COST_PER_REQUEST = 0.50
+MAX_COST_PER_USER_PER_DAY = 5.00
+
+def check_budget(user_id: str, projected: float) -> None:
+    spent = usage.today(user_id)
+    if spent + projected &gt; MAX_COST_PER_USER_PER_DAY:
+        raise BudgetExceeded(f"daily limit reached ({spent:.2f} USD)")</code></pre>
+  <p>Also worth having: a global kill switch, alerts on daily spend, alerts on a sudden change in average tokens per
+     request (usually a prompt bug or a retrieval bug), and per-tenant quotas if you are multi-tenant. A runaway agent
+     loop at 3am is a real way to lose a lot of money quickly.</p>
+
+  <h2>Alerts worth setting</h2>
+  <table>
+    <tr><td>Error rate by type</td><td>Especially 429s and timeouts — they indicate capacity problems</td></tr>
+    <tr><td>p95 latency per feature</td><td>Regressions usually arrive with a deploy</td></tr>
+    <tr><td>Daily spend, and spend per feature</td><td>Catch runaway loops the same day</td></tr>
+    <tr><td>Cache hit rate</td><td>A sudden drop means someone broke the prefix</td></tr>
+    <tr><td>Refusal / "not found" rate</td><td>A spike means retrieval or ingestion broke</td></tr>
+    <tr><td>Average output tokens</td><td>Creeping up means a prompt change made answers verbose</td></tr>
+    <tr><td>Negative feedback rate</td><td>The closest thing to a quality alarm you get in real time</td></tr>
+  </table>
+
+  <h2>Reliability patterns</h2>
+  <pre><code># timeouts and retries at the boundary
+client = anthropic.Anthropic(timeout=30.0, max_retries=3)
+
+# graceful degradation
+try:
+    return rag_answer(question)
+except (RateLimitError, APITimeoutError):
+    log.warning("degrading to search-only")
+    return {"answer": None, "sources": retrieve(question)}   # still useful
+
+# idempotency for expensive work
+key = f"summary:{document_hash}"
+if cached := store.get(key):
+    return cached</code></pre>
+  <p>Also: bound concurrency to stay inside rate limits, put non-interactive work in a queue, and make anything the user
+     is not waiting on a background job. Standard backend engineering — which is exactly why your existing experience
+     transfers.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Add structured logging of every model call in your project, including tokens, cost and latency.</li>
+      <li>Wire up Langfuse (or any tracer) and inspect a full trace of one RAG request. Find the slowest span.</li>
+      <li>Build the weekly cost query and identify your most expensive feature.</li>
+      <li>Enable prompt caching on your largest stable prefix and measure the cost difference over 20 requests.</li>
+      <li>Implement routing between a cheap and a strong model, then measure quality on your eval set to check you did
+          not silently lose accuracy.</li>
+      <li>Add a per-user daily budget and a global kill switch, and test that both actually stop requests.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

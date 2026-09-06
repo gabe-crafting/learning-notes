@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Engineering — Learning</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>AI Engineering</h1>
+  <p class="lead">Building products on top of models that already exist. Not training them — integrating them, grounding
+     them in your data, giving them tools, and making the result reliable enough to ship.</p>
+
+  <h2>Who this is for</h2>
+  <p>Developers. If you already build software — frontend, backend, either — you have most of what this job needs. AI
+     engineering is mostly ordinary engineering (APIs, data pipelines, latency, cost, tests) applied to a component that
+     is non-deterministic. That last part is what these lessons are really about.</p>
+  <p>You do not need heavy maths. You need to understand embeddings well enough to reason about retrieval, and enough
+     statistics to read an evaluation table honestly. That is a different bar from ML engineering, where you would be
+     training and optimising models.</p>
+
+  <h2>How the course is organised</h2>
+  <table>
+    <tr><th>Lessons</th><th>Theme</th></tr>
+    <tr><td>1–2</td><td>The role, and Python for people who already program</td></tr>
+    <tr><td>3–7</td><td>The core loop: how models behave, calling them, prompting, structured output, tools</td></tr>
+    <tr><td>8–12</td><td>Retrieval: embeddings, vector stores, ingestion, RAG, and making retrieval actually work</td></tr>
+    <tr><td>13–15</td><td>Agents and orchestration</td></tr>
+    <tr><td>16–18</td><td>The production half nobody teaches: evaluation, observability, cost, security</td></tr>
+    <tr><td>19–20</td><td>Open models, fine-tuning, and shipping a service</td></tr>
+    <tr><td>21</td><td>Portfolio projects and an eight-week schedule</td></tr>
+  </table>
+
+  <div class="note">
+    <strong>The order is deliberate</strong>
+    Lessons 16–18 are where most self-taught AI engineers are weak, and they are exactly what separates a demo from a
+    product. Do not skip them to build another chatbot.
+  </div>
+
+  <h2>Lessons</h2>
+  <div class="cards" id="lesson-cards"></div>
+
+  <h2>Code in this course</h2>
+  <p>Examples are Python with the official Anthropic SDK, because a course needs one concrete API and this one is
+     current. Every concept — messages, streaming, tool calling, structured output, caching — has a direct equivalent at
+     OpenAI, Google and the open-model servers; the shapes differ, the ideas do not. Lesson 4 covers what is portable
+     and what is not.</p>
+  <div class="warn">
+    <strong>Model APIs drift faster than tutorials</strong>
+    Parameters get removed, model IDs change, and last year's blog post confidently teaches something that now returns
+    a 400. Treat every snippet you find online — including these — as a starting point, and check the provider's own
+    reference. Building the habit of reading primary documentation is itself part of this job.
+  </div>
+
+  <h2>What "job-ready" means here</h2>
+  <ul>
+    <li>You can take a business problem and say honestly whether an LLM is the right tool.</li>
+    <li>You can build a retrieval pipeline whose answers cite their sources and whose retrieval quality you have
+        measured — not guessed.</li>
+    <li>You can give a model tools and keep the loop bounded, observable and safe.</li>
+    <li>You can put a number on quality, latency and cost, and improve one without silently wrecking the others.</li>
+    <li>You have two or three finished projects someone can run, and you can explain every design decision in them.</li>
+  </ul>
+
+  <h2>Prerequisites</h2>
+  <p>Comfortable in at least one programming language, able to use git and the terminal, and able to read HTTP and JSON.
+     Python is taught in lesson 2 at the level this work requires. Docker and SQL show up later; the
+     <a href="../java-spring/index.html">Spring course</a> covers those ideas from the backend side if you want them
+     first.</p>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

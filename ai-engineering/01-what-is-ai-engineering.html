@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What an AI engineer does — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="01-what-is-ai-engineering.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>What an AI engineer does</h1>
+  <p class="lead">The job is building software whose most important component is a model you did not train and cannot
+     fully predict. Everything else follows from that sentence.</p>
+
+  <h2>AI engineer versus ML engineer versus data scientist</h2>
+  <table>
+    <tr><th></th><th>AI engineer</th><th>ML engineer</th><th>Data scientist</th></tr>
+    <tr><td>Core work</td><td>Builds products on existing models</td><td>Trains, fine-tunes and serves models</td>
+        <td>Analyses data, builds statistical models, informs decisions</td></tr>
+    <tr><td>Daily tools</td><td>Model APIs, vector stores, orchestration, evals, backend infra</td>
+        <td>PyTorch, training pipelines, GPUs, MLOps</td><td>SQL, pandas, notebooks, statistics</td></tr>
+    <tr><td>Maths needed</td><td>Light: vectors, similarity, basic statistics for evaluation</td>
+        <td>Heavy: linear algebra, optimisation, probability</td><td>Heavy on statistics</td></tr>
+    <tr><td>Comes from</td><td>Software engineering</td><td>ML research or engineering</td><td>Statistics, analytics</td></tr>
+    <tr><td>Ships</td><td>A running service</td><td>A model artifact plus serving</td><td>An analysis or a report</td></tr>
+  </table>
+  <p>The distinction matters when you read job ads, because titles are used loosely. Read the responsibilities, not the
+     title: "integrate LLM capabilities into our platform" is AI engineering; "improve model accuracy through training"
+     is not.</p>
+
+  <h2>Why a developer background is an advantage</h2>
+  <p>The hard parts of a production AI system are the parts you already know how to do:</p>
+  <ul>
+    <li>Designing an API, a data model and a deployment.</li>
+    <li>Handling failures, timeouts, retries and partial results.</li>
+    <li>Caching, batching, queues, background jobs.</li>
+    <li>Testing, CI, observability, cost control.</li>
+    <li>Security and input validation — which matters much more here, not less.</li>
+  </ul>
+  <p>What is genuinely new is small: prompting, embeddings and retrieval, tool loops, and evaluating something that has
+     no single correct answer. That is a matter of weeks, not years — which is why the transition is realistic.</p>
+
+  <h2>What you will actually build</h2>
+  <p>Nearly every product in this space is one of a handful of shapes:</p>
+  <table>
+    <tr><td><strong>Extraction / classification</strong></td><td>Unstructured text in, structured records out. Invoices,
+        emails, tickets, CVs. Often the highest-value and least glamorous work.</td></tr>
+    <tr><td><strong>Question answering over your data</strong></td><td>RAG. "Ask our documentation / contracts /
+        knowledge base." The single most common brief.</td></tr>
+    <tr><td><strong>Assistants and copilots</strong></td><td>A chat surface with tools that can read and act inside your
+        product.</td></tr>
+    <tr><td><strong>Agents / workflow automation</strong></td><td>Multi-step tasks: triage a ticket, research a topic,
+        migrate a file, draft and send.</td></tr>
+    <tr><td><strong>Content generation</strong></td><td>Drafting, summarising, translating, rewriting — usually with a
+        human approving the output.</td></tr>
+  </table>
+  <p>Notice how much of that is plumbing. A realistic split of a working day: perhaps 10% prompt wording, 90% data
+     pipelines, API design, evaluation, debugging and cost.</p>
+
+  <h2>The stack</h2>
+  <pre><code>┌─────────────────────────────────────────────────────────┐
+│ UI            web app, chat surface, streaming output    │
+├─────────────────────────────────────────────────────────┤
+│ Application   your API: auth, rate limits, business rules│
+├─────────────────────────────────────────────────────────┤
+│ Orchestration prompts, tool loops, agents, retries       │
+│               (your own code, or LangGraph/LlamaIndex)   │
+├─────────────────────────────────────────────────────────┤
+│ Retrieval     embeddings + vector store + reranking      │
+├─────────────────────────────────────────────────────────┤
+│ Model         Claude / GPT / Gemini API, or open weights │
+├─────────────────────────────────────────────────────────┤
+│ Cross-cutting evals, tracing, caching, cost, guardrails  │
+└─────────────────────────────────────────────────────────┘</code></pre>
+  <p>This course walks up and down that diagram. The bottom two rows are what beginners obsess over; the top and the
+     cross-cutting row are what makes something shippable.</p>
+
+  <h2>The uncomfortable truths</h2>
+  <ul>
+    <li><strong>The model is non-deterministic.</strong> The same input can produce different output. Your tests, your
+        error handling and your product design all have to accommodate that.</li>
+    <li><strong>It will be confidently wrong.</strong> Hallucination is not a bug that gets patched; it is a property
+        you design around — with retrieval, citations, validation and human review where the cost of error is high.</li>
+    <li><strong>Demos are easy, products are not.</strong> A weekend RAG demo answers five questions well. Making it
+        answer 500 real user questions well is most of the job.</li>
+    <li><strong>Latency and cost are product features.</strong> A brilliant answer after 40 seconds is often worse than
+        a decent answer in three.</li>
+    <li><strong>"Just use an agent" is usually wrong.</strong> Most problems are better solved by a fixed pipeline with
+        one or two model calls. Agents cost more, fail in more ways, and are harder to debug.</li>
+  </ul>
+
+  <h2>How to think about a new brief</h2>
+  <p>Before writing any code, answer these:</p>
+  <ol>
+    <li><strong>Does this need a model at all?</strong> A regex, a database query or a rules table is cheaper, faster and
+        testable. Use the model for the part that genuinely needs language understanding.</li>
+    <li><strong>What does "correct" mean here, and who decides?</strong> If you cannot describe a good answer, you
+        cannot evaluate one, and you will iterate forever on vibes.</li>
+    <li><strong>What is the cost of being wrong?</strong> A wrong product recommendation is a shrug; a wrong dosage or
+        a wrong legal clause is a catastrophe. This determines how much validation and human review you need.</li>
+    <li><strong>Where does the knowledge live?</strong> If the answer is in your documents, you need retrieval, not a
+        bigger model.</li>
+    <li><strong>What is the simplest thing that could work?</strong> Start with one call and a good prompt. Add
+        retrieval when the model lacks facts. Add tools when it must act. Add an agent only when the steps genuinely
+        cannot be fixed in advance.</li>
+  </ol>
+
+  <h2>The skills, in the order employers ask about them</h2>
+  <ol>
+    <li>Calling model APIs well: streaming, structured output, tool calling, errors, cost.</li>
+    <li>Prompting as engineering — versioned, tested, not folklore.</li>
+    <li>Embeddings and retrieval; being able to explain why a RAG answer was wrong.</li>
+    <li>Agents and tool design, including how to bound them.</li>
+    <li>Evaluation and observability — the strongest signal that you have shipped something real.</li>
+    <li>Ordinary backend competence: Docker, a cloud, queues, databases.</li>
+  </ol>
+
+  <h2>What a portfolio has to show</h2>
+  <p>Certificates are close to worthless here; the field moves faster than curricula. Running code is the currency.
+     Lesson 21 specifies three projects in detail, but the shape is: a document Q&amp;A system with citations, an agent
+     that uses real external tools, and something with an evaluation suite and a cost report attached. That third
+     attribute — evidence you measured your own system — is what most candidates lack.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Find five job adverts for "AI Engineer". List the tools and responsibilities each names, and mark which are
+          in this course. Note how many ask for training models (few) versus integration (most).</li>
+      <li>Take a product you use daily and write down one feature an LLM could genuinely improve. Then answer the five
+          questions above for it, in writing.</li>
+      <li>Write a one-paragraph definition of the difference between an AI engineer and an ML engineer, from memory.
+          You will be asked this in an interview.</li>
+      <li>List three tasks where using an LLM would be the wrong choice, and say what you would use instead.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

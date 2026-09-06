@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relations and transactions — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="09-relations-transactions.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Relations and transactions</h1>
+  <p class="lead">Where JPA gets subtle: associations between entities, the N+1 problem, and what
+     <code>@Transactional</code> really does.</p>
+
+  <h2>Many-to-one and one-to-many</h2>
+  <pre><code>@Entity
+public class Task {
+
+    @Id @GeneratedValue private Long id;
+    private String title;
+
+    @ManyToOne(fetch = FetchType.LAZY)          // ALWAYS lazy on @ManyToOne
+    @JoinColumn(name = "project_id", nullable = false)
+    private Project project;                     // the foreign key lives here — the owning side
+}
+
+@Entity
+public class Project {
+
+    @Id @GeneratedValue private Long id;
+    private String name;
+
+    @OneToMany(mappedBy = "project", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List&lt;Task&gt; tasks = new ArrayList&lt;&gt;();   // the inverse side
+
+    public void addTask(Task task) {             // keep both sides in sync yourself
+        tasks.add(task);
+        task.setProject(this);
+    }
+
+    public void removeTask(Task task) {
+        tasks.remove(task);
+        task.setProject(null);
+    }
+}</code></pre>
+  <p><code>mappedBy</code> says "the other side owns this relationship". Only the owning side's column is written; if
+     you set only the inverse side, nothing is saved. That is why the helper methods above exist.</p>
+
+  <h3>Fetch types</h3>
+  <table>
+    <tr><td><code>LAZY</code></td><td>Load on first access. Default for collections; <strong>set it explicitly on
+        <code>@ManyToOne</code> and <code>@OneToOne</code></strong>, whose default is EAGER.</td></tr>
+    <tr><td><code>EAGER</code></td><td>Load immediately, always, whether you need it or not. It quietly turns one query
+        into several and is very hard to undo later.</td></tr>
+  </table>
+  <p>Rule: <strong>everything lazy</strong>, then fetch what you need explicitly per query.</p>
+
+  <h2>Many-to-many</h2>
+  <pre><code>@ManyToMany
+@JoinTable(name = "task_tags",
+           joinColumns = @JoinColumn(name = "task_id"),
+           inverseJoinColumns = @JoinColumn(name = "tag_id"))
+private Set&lt;Tag&gt; tags = new HashSet&lt;&gt;();</code></pre>
+  <p>Use a <code>Set</code>, not a <code>List</code>. And the moment the relationship needs an attribute of its own — a
+     date added, a role, a quantity — replace it with an explicit join entity and two
+     <code>@ManyToOne</code>s. That happens more often than not.</p>
+
+  <h2>The N+1 problem</h2>
+  <pre><code>List&lt;Task&gt; tasks = repository.findAll();          // 1 query
+for (Task t : tasks) {
+    System.out.println(t.getProject().getName());  // 1 query per task → 101 queries for 100 tasks
+}</code></pre>
+  <p>This is the single most common performance bug in Spring applications, and it is invisible until you look at the
+     SQL log. Fixes:</p>
+  <pre><code>// 1. join fetch in a query
+@Query("select t from Task t join fetch t.project where t.status = :status")
+List&lt;Task&gt; findByStatusWithProject(@Param("status") TaskStatus status);
+
+// 2. an entity graph
+@EntityGraph(attributePaths = {"project", "tags"})
+List&lt;Task&gt; findByStatus(TaskStatus status);
+
+// 3. batch fetching, globally
+spring.jpa.properties.hibernate.default_batch_fetch_size: 50
+
+// 4. do not load the association at all — project into a DTO with just the fields you need</code></pre>
+  <div class="note">
+    <strong>How to catch it</strong>
+    Turn on <code>org.hibernate.SQL: DEBUG</code>, call the endpoint once, and count the queries in the log. If the
+    number grows with the number of rows, you have an N+1.
+  </div>
+
+  <h2>LazyInitializationException</h2>
+  <pre><code>// service returns the entity, transaction ends
+// then Jackson serialises it and touches task.getProject()
+// → LazyInitializationException: could not initialize proxy - no Session</code></pre>
+  <p>The clean fix is the one from lesson 6: <strong>never return entities from a controller.</strong> Map to a DTO
+     inside the transaction, where the data is still reachable.</p>
+  <pre><code>spring:
+  jpa:
+    open-in-view: false      # set this. It is true by default and hides the problem</code></pre>
+  <p><code>open-in-view=true</code> keeps the persistence session open for the whole request, so lazy loading
+     "works" — from the view layer, one query at a time, outside any transaction. Turning it off makes the problem
+     visible where it belongs.</p>
+
+  <h2>Transactions</h2>
+  <pre><code>@Service
+@Transactional(readOnly = true)              // sensible class-level default
+public class TransferService {
+
+    @Transactional                            // read-write for this method
+    public void transfer(Long fromId, Long toId, BigDecimal amount) {
+        Account from = accounts.findById(fromId).orElseThrow();
+        Account to   = accounts.findById(toId).orElseThrow();
+
+        from.withdraw(amount);
+        to.deposit(amount);
+        // both succeed or both are rolled back
+    }
+}</code></pre>
+  <p>A transaction is atomic: every write inside it commits together, or none does. Spring starts one when a
+     <code>@Transactional</code> method is entered from outside the bean, commits on normal return, and rolls back on
+     an unchecked exception.</p>
+
+  <h3>Rollback rules</h3>
+  <pre><code>@Transactional                                   // rolls back on RuntimeException and Error
+@Transactional(rollbackFor = Exception.class)     // ...also on checked exceptions
+@Transactional(noRollbackFor = NotFoundException.class)</code></pre>
+  <p>By default a <strong>checked</strong> exception does <em>not</em> roll back. That default surprises everyone
+     exactly once.</p>
+
+  <h3>Propagation</h3>
+  <table>
+    <tr><td><code>REQUIRED</code> (default)</td><td>Join the caller's transaction, or start one</td></tr>
+    <tr><td><code>REQUIRES_NEW</code></td><td>Suspend the caller's and run in a fresh one — useful for audit rows that
+        must survive a rollback</td></tr>
+    <tr><td><code>SUPPORTS</code>, <code>MANDATORY</code>, <code>NEVER</code>, <code>NESTED</code></td><td>Rarer; look
+        them up when you meet one</td></tr>
+  </table>
+
+  <div class="warn">
+    <strong>Self-invocation does nothing</strong>
+    <pre><code>@Service
+public class TaskService {
+    public void a() { b(); }                 // b() runs with NO transaction
+    @Transactional public void b() { ... }
+}</code></pre>
+    The annotation is implemented by a proxy around the bean. An internal call never leaves the object, so the proxy is
+    not involved. Move the method to another bean, or inject the bean into itself (ugly). The same applies to
+    <code>@Async</code>, <code>@Cacheable</code> and <code>@PreAuthorize</code>.
+  </div>
+
+  <h3>Where to put it</h3>
+  <p>On the <strong>service</strong> — the layer that defines a unit of business work. Not on the controller (which
+     would hold a transaction open across serialisation), and not on the repository (which would make every save its
+     own transaction, defeating atomicity).</p>
+
+  <h3>Keep them short</h3>
+  <pre><code>@Transactional
+public void placeOrder(OrderRequest request) {
+    Order order = repository.save(new Order(request));
+    paymentGateway.charge(order);          // ✗ an HTTP call inside a transaction:
+                                           //   the database connection is held for its full duration
+}</code></pre>
+  <p>Do the external call outside the transaction, or record intent and process it afterwards. A connection pool is
+     small; a slow third party can exhaust it and take the whole service down.</p>
+
+  <h2>Concurrent updates</h2>
+  <pre><code>@Entity
+public class Account {
+    @Version private Long version;        // optimistic locking
+}
+// two users update the same row → the second gets OptimisticLockingFailureException
+// catch it and either retry or tell the user the data changed</code></pre>
+  <pre><code>@Lock(LockModeType.PESSIMISTIC_WRITE)     // a real database lock; use sparingly
+@Query("select a from Account a where a.id = :id")
+Optional&lt;Account&gt; findByIdForUpdate(@Param("id") Long id);</code></pre>
+  <p>Optimistic locking is the right default for web applications: no locks held between requests, and conflicts are
+     rare and detectable.</p>
+
+  <h2>Cascades</h2>
+  <pre><code>cascade = CascadeType.ALL        // PERSIST, MERGE, REMOVE, REFRESH, DETACH
+orphanRemoval = true            // removing a child from the collection deletes the row</code></pre>
+  <p>Cascade from parent to genuinely owned children (a project owns its tasks). Never cascade
+     <code>REMOVE</code> to something shared — deleting a task should not delete the tag.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Add <code>Project</code> with a one-to-many to <code>Task</code>, including the sync helper methods.</li>
+      <li>Reproduce an N+1: list tasks with their project name, count the queries, then fix it with
+          <code>join fetch</code> and confirm the count drops.</li>
+      <li>Set <code>open-in-view: false</code>, trigger a <code>LazyInitializationException</code>, and fix it by
+          mapping to a DTO inside the service.</li>
+      <li>Write a transfer method across two entities and prove atomicity by throwing halfway through.</li>
+      <li>Throw a checked exception in a transactional method and observe that the change is committed. Then fix it with
+          <code>rollbackFor</code>.</li>
+      <li>Add <code>@Version</code> and simulate a concurrent update from two threads.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

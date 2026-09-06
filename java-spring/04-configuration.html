@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configuration and profiles — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="04-configuration.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Configuration and profiles</h1>
+  <p class="lead">The same jar has to run on your laptop, in the test environment and in production. Configuration is
+     what makes that possible — and secrets are what make it dangerous.</p>
+
+  <h2>application.yml</h2>
+  <pre><code>spring:
+  application:
+    name: tasks
+  datasource:
+    url: jdbc:postgresql://localhost:5432/tasks
+    username: tasks
+    password: dev-only
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+logging:
+  level:
+    root: INFO
+    com.example.tasks: DEBUG
+    org.hibernate.SQL: DEBUG
+
+app:                        # your own properties live under your own prefix
+  max-tasks-per-user: 100
+  cleanup-after: 30d
+  features:
+    notifications: true</code></pre>
+  <p>The equivalent <code>.properties</code> syntax flattens the tree:
+     <code>spring.datasource.url=...</code>. Both work; YAML is easier to read once there are more than a dozen
+     entries.</p>
+
+  <h2>Reading a property</h2>
+  <h3>@Value for one-offs</h3>
+  <pre><code>@Service
+public class TaskService {
+
+    private final int maxTasks;
+
+    public TaskService(@Value("${app.max-tasks-per-user:50}") int maxTasks) {
+        this.maxTasks = maxTasks;      // :50 is the default when the property is absent
+    }
+}</code></pre>
+
+  <h3>@ConfigurationProperties for groups — prefer this</h3>
+  <pre><code>@ConfigurationProperties(prefix = "app")
+public record AppProperties(
+        int maxTasksPerUser,
+        Duration cleanupAfter,
+        Features features) {
+
+    public record Features(boolean notifications) { }
+}</code></pre>
+  <pre><code>@SpringBootApplication
+@EnableConfigurationProperties(AppProperties.class)
+public class TasksApplication { ... }</code></pre>
+  <pre><code>@Service
+public class TaskService {
+    private final AppProperties props;
+
+    public TaskService(AppProperties props) { this.props = props; }
+
+    void check(int count) {
+        if (count &gt;= props.maxTasksPerUser()) throw new TooManyTasksException();
+    }
+}</code></pre>
+  <p>Advantages over <code>@Value</code>: typed (a <code>Duration</code> parses <code>30d</code> for you), grouped,
+     validated, discoverable, and IDE-completable. Note the relaxed binding — <code>max-tasks-per-user</code> in YAML
+     maps to <code>maxTasksPerUser</code> in Java.</p>
+
+  <h3>Validating configuration at startup</h3>
+  <pre><code>@Validated
+@ConfigurationProperties(prefix = "app")
+public record AppProperties(
+        @Min(1) @Max(1000) int maxTasksPerUser,
+        @NotNull Duration cleanupAfter) { }</code></pre>
+  <p>A bad value now fails the application at startup with a clear message, instead of at 3am with a
+     <code>NumberFormatException</code>.</p>
+
+  <h2>Profiles</h2>
+  <p>A profile is a named set of configuration. Files are picked up by convention:</p>
+  <pre><code>application.yml            always loaded
+application-dev.yml        loaded when the "dev" profile is active
+application-test.yml
+application-prod.yml</code></pre>
+  <pre><code># application.yml
+spring:
+  profiles:
+    default: dev
+
+---
+# a profile-specific block in the same file also works
+spring:
+  config:
+    activate:
+      on-profile: prod
+  jpa:
+    show-sql: false
+logging:
+  level:
+    root: WARN</code></pre>
+  <p>Activating one:</p>
+  <pre><code>java -jar app.jar --spring.profiles.active=prod
+SPRING_PROFILES_ACTIVE=prod java -jar app.jar
+./mvnw spring-boot:run -Dspring-boot.run.profiles=dev</code></pre>
+
+  <h3>Profile-specific beans</h3>
+  <pre><code>@Component
+@Profile("dev")
+public class LoggingEmailSender implements EmailSender {      // just logs
+    public void send(...) { log.info("would send: {}", message); }
+}
+
+@Component
+@Profile("prod")
+public class SmtpEmailSender implements EmailSender { ... }
+
+@Profile("!prod")     // everything except prod
+@Profile({"dev", "test"})</code></pre>
+  <p>Use profiles for environment differences. Do not use them for feature toggles that change per customer or per
+     request — those belong in properties or a feature-flag service.</p>
+
+  <h2>Where configuration comes from, and who wins</h2>
+  <p>Spring merges many sources. Later in this list overrides earlier:</p>
+  <ol>
+    <li><code>application.yml</code> packaged inside the jar</li>
+    <li><code>application-{profile}.yml</code> inside the jar</li>
+    <li><code>application.yml</code> in the working directory or <code>./config/</code></li>
+    <li>OS environment variables</li>
+    <li>JVM system properties (<code>-Dserver.port=9090</code>)</li>
+    <li>Command-line arguments (<code>--server.port=9090</code>)</li>
+  </ol>
+  <p>Environment variables use a relaxed spelling: <code>SPRING_DATASOURCE_URL</code> sets
+     <code>spring.datasource.url</code>. That is how containers and cloud platforms configure your app without touching
+     the jar.</p>
+
+  <h2>Secrets</h2>
+  <div class="warn">
+    <strong>Never commit a password, key or token</strong>
+    Not in <code>application.yml</code>, not "temporarily", not in a test. Git remembers forever, and repository
+    scanners find them within minutes of a push.
+  </div>
+  <pre><code># application.yml — reference, do not embed
+spring:
+  datasource:
+    url: ${DATABASE_URL}
+    username: ${DATABASE_USER}
+    password: ${DATABASE_PASSWORD}       # fails fast at startup if unset
+
+app:
+  api-key: ${API_KEY:}                    # empty default, for local runs</code></pre>
+  <p>Locally, set them in your IDE run configuration or a <code>.env</code> file that is git-ignored. In production the
+     platform injects them (Kubernetes secrets, AWS Parameter Store, Vault). If a secret does leak, rotate it — removing
+     the commit is not enough.</p>
+
+  <h2>Configuration in tests</h2>
+  <pre><code>@SpringBootTest
+@ActiveProfiles("test")
+@TestPropertySource(properties = "app.max-tasks-per-user=5")
+class TaskServiceTest { ... }</code></pre>
+  <p><code>src/test/resources/application-test.yml</code> is the natural home for test settings — an in-memory database,
+     verbose logging, short timeouts.</p>
+
+  <h2>Logging configuration</h2>
+  <pre><code>logging:
+  level:
+    root: INFO
+    com.example.tasks: DEBUG
+    org.springframework.web: DEBUG        # see request mapping decisions
+    org.hibernate.SQL: DEBUG              # see the generated SQL
+    org.hibernate.orm.jdbc.bind: TRACE    # ...and the bound parameters
+  pattern:
+    console: "%d{HH:mm:ss} %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/app.log</code></pre>
+  <p>Those Hibernate lines are the single most useful debugging tool in the next few lessons.</p>
+
+  <h2>Common mistakes</h2>
+  <ul>
+    <li>Tabs in YAML — the file will not parse. Spaces only.</li>
+    <li>Hard-coding <code>localhost</code> or a port in Java code instead of a property.</li>
+    <li>Using <code>@Value</code> in a field rather than a constructor parameter, then wondering why it is null in a
+        unit test.</li>
+    <li>Defining the same key in <code>application.properties</code> and <code>application.yml</code> — properties
+        wins, silently.</li>
+    <li>Putting production credentials in a profile "just for now".</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Move every hard-coded value in your app into <code>application.yml</code>.</li>
+      <li>Create an <code>AppProperties</code> record with <code>@ConfigurationProperties</code> and validation, and
+          inject it into a service.</li>
+      <li>Add <code>dev</code> and <code>prod</code> profiles with different log levels and a different
+          <code>EmailSender</code> bean; run with each and confirm which one is used.</li>
+      <li>Override the port three ways: YAML, environment variable, command-line argument. Confirm the precedence
+          order.</li>
+      <li>Make a required property missing and read the failure message Boot produces.</li>
+      <li>Turn on <code>org.hibernate.SQL</code> logging — you will need it in lesson 8.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

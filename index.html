@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Learning</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body data-root="">
+<div id="topbar"></div>
+<div class="layout" style="grid-template-columns: 1fr">
+<main>
+  <h1>Learning</h1>
+  <p class="lead">A folder per subject, a page per lesson. Read them in order, or jump to whatever you need.</p>
+
+  <div class="cards" id="course-cards"></div>
+
+  <h2>How this site is organised</h2>
+  <p>Every subject lives in its own folder next to this page. A folder holds an <code>index.html</code> overview plus one
+     HTML page per lesson, and folders can nest (for example <code>java-spring/react/</code>) when a subject grows
+     sub-topics.</p>
+  <p>Navigation is generated, not hand-written. <a href="assets/courses.js">assets/courses.js</a> lists the courses and
+     their lessons; <a href="assets/nav.js">assets/nav.js</a> turns that list into the breadcrumb, sidebar, card grids
+     and prev/next links on every page.</p>
+
+  <h3>Adding a lesson</h3>
+  <pre><code>1. Copy an existing lesson page into the course folder.
+2. Update &lt;title&gt; and the data-page attribute on &lt;body&gt;.
+3. Add an entry to the course's lessons array in assets/courses.js.</code></pre>
+
+  <h3>Adding a subject</h3>
+  <pre><code>1. mkdir python
+2. Create python/index.html (copy a course overview page, change data-course).
+3. Append a new course object to window.COURSES in assets/courses.js.</code></pre>
+
+  <div class="note">
+    <strong>Reading the pages</strong>
+    Open <code>index.html</code> in any browser — there is no build step, no server and no dependencies.
+  </div>
+</main>
+</div>
+<script src="assets/courses.js"></script>
+<script src="assets/nav.js"></script>
+</body>
+</html>

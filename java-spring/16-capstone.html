@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Capstone project — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="16-capstone.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Capstone project</h1>
+  <p class="lead">Build one complete service that uses everything in this course. Finished and deployed beats perfect
+     and abandoned — this is the project you put on your CV.</p>
+
+  <h2>The brief: a task manager API</h2>
+  <p>Users register and log in. Each user owns projects; each project holds tasks. Tasks have a status, a due date,
+     tags, and can be assigned to a user. The API is JSON over HTTP, authenticated with JWT, backed by Postgres, tested,
+     containerised and deployed.</p>
+
+  <h2>The domain</h2>
+  <pre><code>User        id, email (unique), passwordHash, displayName, roles, createdAt
+Project     id, name, description, owner → User, createdAt, archived
+Task        id, title, description, status, priority, dueDate,
+            project → Project, assignee → User (nullable), tags, createdAt, completedAt
+Tag         id, name (unique)
+
+TaskStatus  TODO, IN_PROGRESS, DONE, CANCELLED
+Priority    LOW, MEDIUM, HIGH</code></pre>
+
+  <h2>The endpoints</h2>
+  <pre><code>POST   /api/auth/register           create an account            201
+POST   /api/auth/login              obtain a JWT                 200
+GET    /api/me                      the current user             200
+
+GET    /api/projects                own projects, paged          200
+POST   /api/projects                create                       201 + Location
+GET    /api/projects/{id}           one project                  200 / 404
+PUT    /api/projects/{id}           update                       200
+DELETE /api/projects/{id}           delete                       204
+POST   /api/projects/{id}/archive   state transition             200
+
+GET    /api/projects/{id}/tasks     tasks in a project, filtered 200
+POST   /api/projects/{id}/tasks     create a task                201
+GET    /api/tasks/{id}              one task                     200 / 404
+PATCH  /api/tasks/{id}              partial update               200
+POST   /api/tasks/{id}/complete     mark done                    200 / 409
+DELETE /api/tasks/{id}                                           204
+
+GET    /api/tasks?status=&amp;due=&amp;tag=&amp;assignee=&amp;page=&amp;size=&amp;sort=
+GET    /api/stats                   counts by status             200</code></pre>
+
+  <h2>Build it in these steps</h2>
+  <h3>1 — Skeleton <span style="color:var(--muted);font-weight:400">(lesson 2)</span></h3>
+  <ul>
+    <li>Generate with web, validation, JPA, security, Flyway, Postgres driver, devtools, test.</li>
+    <li>Package by feature: <code>auth</code>, <code>user</code>, <code>project</code>, <code>task</code>,
+        <code>common</code>.</li>
+    <li>Commit. Then commit after every step below.</li>
+  </ul>
+
+  <h3>2 — Database <span style="color:var(--muted);font-weight:400">(lesson 10)</span></h3>
+  <ul>
+    <li><code>compose.yaml</code> with Postgres; <code>docker compose up -d</code>.</li>
+    <li>Flyway <code>V1__initial_schema.sql</code> creating all five tables with constraints and indexes.</li>
+    <li><code>ddl-auto: validate</code>, <code>open-in-view: false</code>.</li>
+  </ul>
+
+  <h3>3 — Entities and repositories <span style="color:var(--muted);font-weight:400">(lessons 8–9)</span></h3>
+  <ul>
+    <li>Entities matching the schema; every association <code>LAZY</code>.</li>
+    <li>Repositories with the derived queries you need; page anything that returns a collection.</li>
+    <li><code>@DataJpaTest</code> for each custom query.</li>
+  </ul>
+
+  <h3>4 — The task feature end to end <span style="color:var(--muted);font-weight:400">(lessons 5–7)</span></h3>
+  <ul>
+    <li>Request and response records with validation annotations.</li>
+    <li>Service holding the rules; controller thin.</li>
+    <li><code>@RestControllerAdvice</code> returning a consistent error body.</li>
+    <li>Rules worth enforcing: cannot complete an already-completed task (409), cannot create a task in an archived
+        project (409), due date not in the past (400).</li>
+  </ul>
+
+  <h3>5 — Authentication <span style="color:var(--muted);font-weight:400">(lesson 11)</span></h3>
+  <ul>
+    <li>Register with BCrypt hashing; reject duplicate emails with 409.</li>
+    <li>Login returning a JWT; a filter that authenticates from the header.</li>
+    <li>Everything except <code>/api/auth/**</code> and <code>/actuator/health</code> requires authentication.</li>
+    <li><strong>Ownership checks</strong>: a user may only see and modify their own projects and tasks. Test the
+        negative case — this is where real APIs leak data.</li>
+  </ul>
+
+  <h3>6 — Tests <span style="color:var(--muted);font-weight:400">(lesson 12)</span></h3>
+  <ul>
+    <li>Unit tests for every business rule, with a fixed <code>Clock</code>.</li>
+    <li><code>@WebMvcTest</code> per controller: happy path, validation failure, 404, 403.</li>
+    <li>One <code>@SpringBootTest</code> with Testcontainers covering register → login → create project → create task →
+        complete.</li>
+  </ul>
+
+  <h3>7 — Production readiness <span style="color:var(--muted);font-weight:400">(lessons 14–15)</span></h3>
+  <ul>
+    <li>Logging with correlation ids; no secrets in logs.</li>
+    <li>Actuator health and info only.</li>
+    <li>Dockerfile, Compose, GitHub Actions, deployed somewhere with a public URL.</li>
+    <li>A README: what it is, how to run it, example requests.</li>
+  </ul>
+
+  <h2>Sketches to get you moving</h2>
+  <pre><code>-- V1__initial_schema.sql (extract)
+create table users (
+    id            bigserial primary key,
+    email         varchar(255) not null unique,
+    password_hash varchar(100) not null,
+    display_name  varchar(100) not null,
+    created_at    timestamptz  not null default now()
+);
+
+create table projects (
+    id          bigserial primary key,
+    name        varchar(200) not null,
+    description text,
+    owner_id    bigint       not null references users (id),
+    archived    boolean      not null default false,
+    created_at  timestamptz  not null default now()
+);
+create index idx_projects_owner on projects (owner_id);
+
+create table tasks (
+    id           bigserial primary key,
+    title        varchar(200) not null,
+    description  text,
+    status       varchar(20)  not null default 'TODO',
+    priority     varchar(10)  not null default 'MEDIUM',
+    due_date     date,
+    project_id   bigint       not null references projects (id) on delete cascade,
+    assignee_id  bigint       references users (id),
+    created_at   timestamptz  not null default now(),
+    completed_at timestamptz,
+    version      bigint       not null default 0
+);
+create index idx_tasks_project on tasks (project_id);
+create index idx_tasks_status  on tasks (status);</code></pre>
+
+  <pre><code>@Service
+@Transactional(readOnly = true)
+public class TaskService {
+
+    private final TaskRepository tasks;
+    private final ProjectRepository projects;
+    private final Clock clock;
+
+    @Transactional
+    public TaskResponse create(Long projectId, CreateTaskRequest request, String userEmail) {
+        Project project = projects.findById(projectId)
+                .orElseThrow(() -&gt; new ProjectNotFoundException(projectId));
+
+        if (!project.getOwner().getEmail().equals(userEmail)) {
+            throw new AccessDeniedException("Not your project");        // → 403
+        }
+        if (project.isArchived()) {
+            throw new ProjectArchivedException(projectId);              // → 409
+        }
+
+        Task task = new Task(request.title(), project);
+        task.setDueDate(request.dueDate());
+        task.setPriority(request.priority());
+
+        return TaskResponse.from(tasks.save(task));
+    }
+
+    @Transactional
+    public TaskResponse complete(Long id, String userEmail) {
+        Task task = tasks.findById(id).orElseThrow(() -&gt; new TaskNotFoundException(id));
+        requireOwner(task, userEmail);
+
+        if (task.getStatus() == TaskStatus.DONE) {
+            throw new TaskAlreadyCompletedException(id);                // → 409
+        }
+        task.setStatus(TaskStatus.DONE);
+        task.setCompletedAt(Instant.now(clock));
+        return TaskResponse.from(task);
+    }
+}</code></pre>
+
+  <h2>Stretch goals, in order of value</h2>
+  <ol>
+    <li><strong>OpenAPI docs</strong> — add <code>springdoc-openapi-starter-webmvc-ui</code> and get interactive
+        documentation at <code>/swagger-ui.html</code>. Reviewers love this.</li>
+    <li><strong>Search and filtering</strong> with <code>Specification</code> for dynamic queries.</li>
+    <li><strong>Refresh tokens</strong> and logout.</li>
+    <li><strong>Email notifications</strong> for tasks due tomorrow, via <code>@Scheduled</code>.</li>
+    <li><strong>Caching</strong> with <code>@Cacheable</code> on the stats endpoint.</li>
+    <li><strong>Rate limiting</strong> on the login endpoint.</li>
+    <li><strong>A small frontend</strong> — even a single HTML page — so it is demonstrable.</li>
+  </ol>
+
+  <h2>How to judge whether it is good</h2>
+  <table>
+    <tr><td>A stranger can clone it and run it</td><td>README with one command, Compose file included</td></tr>
+    <tr><td>Errors are useful</td><td>Consistent JSON errors, correct status codes, no stack traces leaked</td></tr>
+    <tr><td>It is secure</td><td>Hashed passwords, ownership enforced, no secrets committed, negative tests</td></tr>
+    <tr><td>It is tested</td><td>Rules covered by unit tests, one full integration test that actually runs</td></tr>
+    <tr><td>The schema is managed</td><td>Migrations in git, <code>validate</code> not <code>update</code></td></tr>
+    <tr><td>It is deployable</td><td>Configured by environment variables, container builds in CI</td></tr>
+    <tr><td>The code is readable</td><td>Thin controllers, rules in services, entities not exposed</td></tr>
+  </table>
+
+  <h2>Then what</h2>
+  <p>You have finished both courses. The useful next moves, roughly in order:</p>
+  <ul>
+    <li><strong>SQL properly</strong> — joins, indexes, execution plans, transactions and isolation levels. It pays off
+        forever.</li>
+    <li><strong>Read Spring's own documentation</strong>. It is genuinely good, and being able to read reference docs
+        instead of blog posts is a professional skill.</li>
+    <li><strong>Build a second project</strong> in a domain you find interesting, without a tutorial.</li>
+    <li><strong>Contribute a small fix</strong> to an open-source Spring project to practise working in someone else's
+        codebase.</li>
+    <li><strong>Explain your capstone out loud</strong> — the design decisions and the trade-offs. That is what a job
+        interview actually asks.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <p>The whole page is the practice. Do it in the seven steps, commit after each, and do not skip the tests — the
+      point of the capstone is to prove to yourself that you can finish something complete.</p>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

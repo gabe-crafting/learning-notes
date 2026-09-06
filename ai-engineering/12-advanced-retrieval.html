@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retrieval that actually works — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="12-advanced-retrieval.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Retrieval that actually works</h1>
+  <p class="lead">Basic vector search gets you a demo. This lesson is the gap between that and something people can rely
+     on — and the techniques here are what interviewers probe to tell a tutorial-follower from an engineer.</p>
+
+  <h2>First: measure it</h2>
+  <p>You cannot improve retrieval you have not measured, and generation quality hides retrieval problems. Build a small
+     labelled set — 50 questions, each with the chunk ids that genuinely answer it — and score retrieval on its own.</p>
+  <pre><code>def recall_at_k(results: list[str], relevant: set[str], k: int) -> float:
+    """Did we find the right chunks at all?"""
+    return len(set(results[:k]) &amp; relevant) / len(relevant)
+
+def mrr(results: list[str], relevant: set[str]) -> float:
+    """How high up was the first correct chunk? 1.0 = first place."""
+    for rank, chunk_id in enumerate(results, start=1):
+        if chunk_id in relevant:
+            return 1 / rank
+    return 0.0
+
+def ndcg_at_k(results, relevant, k):     # rank-weighted; use when several chunks are relevant
+    import math
+    gains = [1 / math.log2(i + 1) for i, cid in enumerate(results[:k], start=1) if cid in relevant]
+    ideal = sum(1 / math.log2(i + 1) for i in range(1, min(len(relevant), k) + 1))
+    return sum(gains) / ideal if ideal else 0.0</code></pre>
+  <p><strong>Recall@k is the metric that matters most</strong> for RAG: if the right chunk is not in the k you send, the
+     generator cannot possibly answer. Track recall@5, recall@20 and MRR, and re-run the numbers after every change to
+     chunking, model or search strategy.</p>
+
+  <h2>Hybrid search: vectors plus keywords</h2>
+  <p>Vectors understand meaning but miss exact strings: identifiers, error codes, product names, rare terms. Keyword
+     search (BM25) is the opposite. Running both and merging is the single biggest quality jump available.</p>
+  <pre><code>-- Postgres: full-text search alongside pgvector
+alter table chunks add column tsv tsvector
+    generated always as (to_tsvector('simple', content)) stored;
+create index on chunks using gin (tsv);</code></pre>
+  <pre><code>def hybrid_search(question: str, tenant: str, k: int = 20) -> list[str]:
+    vector_hits  = store.vector_search(embed_query(question), tenant=tenant, k=k)
+    keyword_hits = store.keyword_search(question, tenant=tenant, k=k)
+    return reciprocal_rank_fusion([vector_hits, keyword_hits], k=k)
+
+
+def reciprocal_rank_fusion(rankings: list[list[str]], k: int = 20, damping: int = 60) -> list[str]:
+    """Merge ranked lists without needing comparable scores."""
+    scores: dict[str, float] = {}
+    for ranking in rankings:
+        for rank, chunk_id in enumerate(ranking, start=1):
+            scores[chunk_id] = scores.get(chunk_id, 0.0) + 1 / (damping + rank)
+    return [cid for cid, _ in sorted(scores.items(), key=lambda kv: -kv[1])][:k]</code></pre>
+  <p>RRF is the merge to reach for: it needs only the ranks, so you avoid the trap of trying to normalise a cosine score
+     against a BM25 score, which are not on the same scale and never will be.</p>
+
+  <h2>Reranking</h2>
+  <p>Embedding search is fast because query and document are embedded independently. A <strong>cross-encoder</strong>
+     reranker reads the query and the chunk together and scores the pair — far more accurate, far too slow to run over
+     a whole corpus. So: retrieve 50 candidates cheaply, rerank them, keep the best 5.</p>
+  <pre><code>from sentence_transformers import CrossEncoder
+
+reranker = CrossEncoder("BAAI/bge-reranker-v2-m3")
+
+def rerank(question: str, candidates: list[Chunk], top_n: int = 5) -> list[Chunk]:
+    pairs = [(question, c.text) for c in candidates]
+    scores = reranker.predict(pairs)
+    ranked = sorted(zip(candidates, scores), key=lambda cs: -cs[1])
+    return [c for c, _ in ranked[:top_n]]</code></pre>
+  <pre><code>candidates = hybrid_search(question, tenant, k=50)
+sources    = rerank(question, candidates, top_n=5)      # what actually goes in the prompt</code></pre>
+  <p>Hosted rerankers exist (Cohere, Voyage, Jina) if you would rather not run a model. Either way this typically buys a
+     large precision gain for 100–300 ms — usually the second-best change you can make after hybrid search.</p>
+
+  <h2>Fixing the query, not just the search</h2>
+  <h3>Query rewriting and expansion</h3>
+  <pre><code>EXPAND = """Rewrite the user's question into 3 search queries that would find
+relevant passages. Vary the phrasing and include likely synonyms and
+domain terms. Return one query per line, nothing else."""
+
+def multi_query(question: str) -> list[str]:
+    lines = cheap_model(f"{EXPAND}\n\nQuestion: {question}").splitlines()
+    return [question] + [l.strip() for l in lines if l.strip()][:3]
+
+def search_multi(question: str, tenant: str, k: int = 20) -> list[str]:
+    rankings = [store.vector_search(embed_query(q), tenant=tenant, k=k) for q in multi_query(question)]
+    return reciprocal_rank_fusion(rankings, k=k)</code></pre>
+  <p>This rescues badly phrased questions, jargon mismatches and multilingual corpora, at the cost of one cheap call and
+     several searches.</p>
+
+  <h3>HyDE (hypothetical document embeddings)</h3>
+  <pre><code># Ask the model to write the answer it *imagines*, then search with that.
+# An imagined answer looks more like a document than a question does.
+hypothetical = cheap_model(f"Write a short passage that would answer: {question}")
+results = store.vector_search(embed_query(hypothetical), tenant=tenant, k=20)</code></pre>
+  <p>Effective on questions phrased very differently from the source material. Verify on your data — it is not a
+     universal win, and it adds latency.</p>
+
+  <h3>Extract filters from the question</h3>
+  <pre><code>class QueryPlan(BaseModel):
+    search_text: str
+    document_type: str | None = None      # contract | invoice | policy
+    after: str | None = None              # ISO date
+    before: str | None = None
+
+plan = model.parse(question, output_format=QueryPlan)     # lesson 6
+results = store.search(
+    embed_query(plan.search_text), tenant=tenant,
+    filters={"type": plan.document_type, "date_range": (plan.after, plan.before)},
+)</code></pre>
+  <p>"Show me contracts signed after March" contains a semantic part and two structured constraints. Embeddings handle
+     the first badly and the second not at all — so parse them out and let the database do what databases do.</p>
+
+  <h2>Packing the context window</h2>
+  <ul>
+    <li><strong>Deduplicate.</strong> Overlapping chunks retrieve near-identical text; merge adjacent chunks from the
+        same document instead of spending the budget twice.</li>
+    <li><strong>Order deliberately.</strong> Models attend more reliably to the beginning and end of a long context
+        ("lost in the middle"). With five to eight good chunks this hardly matters; with thirty it does — which is an
+        argument for fewer, better chunks.</li>
+    <li><strong>Expand around a hit.</strong> Retrieve the chunk, send its neighbours too, so the answer is not cut in
+        half.</li>
+    <li><strong>Set a token budget</strong> for context and enforce it, rather than letting k implicitly decide your
+        bill.</li>
+  </ul>
+  <pre><code>def pack(sources: list[Chunk], budget_tokens: int = 6000) -> list[Chunk]:
+    packed, used = [], 0
+    for chunk in sources:                       # already in relevance order
+        cost = count_tokens(chunk.text)
+        if used + cost &gt; budget_tokens:
+            break
+        packed.append(chunk); used += cost
+    return packed</code></pre>
+
+  <h2>An honest ordering of what to try</h2>
+  <ol>
+    <li><strong>Fix chunking</strong> (lesson 10). Most "retrieval" problems are chunking problems.</li>
+    <li><strong>Add hybrid search.</strong> Big, cheap, reliable win.</li>
+    <li><strong>Add a reranker.</strong> Second big win.</li>
+    <li><strong>Add contextual prefixes to chunks</strong> at ingestion.</li>
+    <li><strong>Try a better embedding model</strong>, measured on your data.</li>
+    <li><strong>Add query rewriting</strong> for conversational or messy queries.</li>
+    <li>Only then consider exotic strategies — graph RAG, agentic retrieval, fine-tuned embeddings.</li>
+  </ol>
+  <div class="note">
+    <strong>One change at a time, with the numbers written down</strong>
+    Keep a table: configuration, recall@5, recall@20, MRR, latency, cost. Six rows of that table are worth more in an
+    interview than any amount of describing what you "tried".
+  </div>
+
+  <h2>When retrieval is the wrong tool</h2>
+  <ul>
+    <li><strong>Aggregation</strong> — "how many contracts expire this quarter?" is SQL, not similarity. Route these to
+        a query tool.</li>
+    <li><strong>Whole-document tasks</strong> — "summarise this contract" needs the whole document, not five
+        chunks.</li>
+    <li><strong>Small corpora</strong> — under roughly 50 pages, just put everything in the context window with caching
+        and skip the pipeline entirely.</li>
+    <li><strong>Highly structured data</strong> — if it is already in tables, generate a query instead of embedding
+        rows.</li>
+  </ul>
+
+  <h2>Multilingual corpora</h2>
+  <p>A practical note for anyone working outside English: use a multilingual embedding model, and be aware that a
+     Romanian question against English documents will retrieve worse than either alone. Options: translate the query
+     into the corpus language before searching, index both languages, or use a model explicitly trained for
+     cross-lingual retrieval. Test it — do not assume "multilingual" on the model card means good at your pair.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Build a labelled set of 30 questions with the chunk ids that answer them. Measure recall@5 and MRR on your
+          lesson 11 pipeline.</li>
+      <li>Add BM25 and RRF fusion. Re-measure. Write down the delta.</li>
+      <li>Add a cross-encoder reranker over 50 candidates. Re-measure, and record the latency cost.</li>
+      <li>Take the failing query from lesson 8 (the exact identifier) and confirm hybrid search now finds it.</li>
+      <li>Implement multi-query expansion and check whether it helps or just costs more on your data.</li>
+      <li>Produce the comparison table of all configurations you tried, with quality, latency and cost. Put it in your
+          project README.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

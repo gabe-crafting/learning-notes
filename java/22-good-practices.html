@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Junior developer practices — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="22-good-practices.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Junior developer practices</h1>
+  <p class="lead">The parts of the job that are not the language: writing code others can read, working with git,
+     debugging, and surviving code review.</p>
+
+  <h2>Clean code, concretely</h2>
+  <pre><code>// names that carry information
+int d;                          →  int daysSinceLastLogin;
+List&lt;User&gt; list;                →  List&lt;User&gt; activeUsers;
+void process(Order o);          →  void submitForFulfilment(Order order);
+boolean flag;                   →  boolean eligibleForDiscount;
+
+// no magic numbers
+if (user.age() &gt;= 18)           →  if (user.age() &gt;= LEGAL_ADULT_AGE)
+Thread.sleep(86400000);         →  Thread.sleep(Duration.ofDays(1).toMillis());
+
+// comments explain WHY, not WHAT
+// increment i
+i++;
+// the gateway rejects amounts below 1.00, so round up small charges
+amount = amount.max(MINIMUM_CHARGE);</code></pre>
+  <ul>
+    <li><strong>Small methods, one responsibility.</strong> If you need "and" to describe it, split it.</li>
+    <li><strong>Fail fast.</strong> Validate arguments at the entry point of a class, not deep inside.</li>
+    <li><strong>Immutability by default.</strong> <code>final</code> fields, records, defensive copies.</li>
+    <li><strong>Don't repeat yourself — but don't over-abstract either.</strong> Two similar blocks are fine; three is
+        a pattern worth extracting. Premature abstraction is harder to undo than duplication.</li>
+    <li><strong>Delete dead code.</strong> Git remembers it; commented-out blocks just rot.</li>
+    <li><strong>Consistent formatting.</strong> Whatever the team uses. Set the IDE to format on save.</li>
+  </ul>
+
+  <h2>Package structure</h2>
+  <pre><code>// by layer — common, fine for small services
+com.example.shop
+├── controller
+├── service
+├── repository
+└── model
+
+// by feature — scales better as the codebase grows
+com.example.shop
+├── order
+│   ├── OrderController.java
+│   ├── OrderService.java
+│   └── OrderRepository.java
+├── customer
+└── shared</code></pre>
+  <p>Either is defensible. Follow whatever the codebase already does — consistency beats your personal preference.</p>
+
+  <h2>Git for daily work</h2>
+  <pre><code>git checkout -b feature/order-cancellation
+# ... edit ...
+git status                       # what changed
+git diff                         # review before staging — always
+git add -p                       # stage selectively, hunk by hunk
+git commit -m "Add order cancellation with refund"
+git push -u origin feature/order-cancellation
+
+git pull --rebase origin main    # keep history linear
+git log --oneline --graph -20</code></pre>
+  <h3>Commit messages</h3>
+  <pre><code>fix stuff                                        ✗
+Add cancellation endpoint for pending orders     ✓
+
+Add cancellation endpoint for pending orders     ✓✓
+
+Orders can now be cancelled while still PENDING. Cancelling
+issues a refund through the payment gateway and moves the
+order to CANCELLED. Shipped orders are rejected with 409.
+
+Closes #412</code></pre>
+  <p>Imperative mood, a subject line under ~72 characters, and a body explaining <em>why</em> when it is not obvious.
+     One logical change per commit — a commit that touches a feature, a refactor and a formatting pass is impossible to
+     review or revert.</p>
+
+  <h2>Pull requests and code review</h2>
+  <p><strong>Opening one:</strong> keep it small (a few hundred lines beats a thousand), describe what and why, say how
+     you tested it, and review your own diff before asking anyone else. Self-review catches an embarrassing amount.</p>
+  <p><strong>Receiving comments:</strong> they are about the code, not about you. Ask when you do not understand, push
+     back with reasoning when you disagree, and say "good catch" when someone is right. Reply to every comment, even
+     just "done".</p>
+  <p><strong>Reviewing others:</strong> ask questions rather than issuing orders ("what happens if this list is empty?"
+     beats "this is wrong"). Distinguish blocking issues from preferences, and approve when it is good enough — perfect
+     is not the bar.</p>
+
+  <h2>Debugging</h2>
+  <ol>
+    <li><strong>Read the error.</strong> The whole thing, including "Caused by" at the bottom. Most stack traces name
+        the file and line.</li>
+    <li><strong>Reproduce it reliably.</strong> A bug you cannot trigger on demand is a bug you cannot verify fixed.</li>
+    <li><strong>Narrow it down.</strong> Binary search the code path: what is the last point where the data is still
+        correct?</li>
+    <li><strong>Use the debugger.</strong> Breakpoints, step over/into, watch expressions, and conditional breakpoints
+        (<code>orderId.equals("A-1")</code>) beat scattering print statements.</li>
+    <li><strong>Question your assumptions.</strong> The bug lives where you are certain there is no bug.</li>
+    <li><strong>Write a failing test</strong> that captures it, then fix it.</li>
+  </ol>
+
+  <h2>Asking for help well</h2>
+  <pre><code>✗ "It doesn't work, can you help?"
+
+✓ "POST /orders returns 500 when the cart is empty. The stack trace says
+   NullPointerException in OrderService:88 on cart.items(). I checked the
+   request body and items is absent, so I think the DTO deserialises to null
+   rather than an empty list. I tried adding @NotEmpty but the exception
+   happens before validation. Is validation supposed to run before the service?"</code></pre>
+  <p>Say what you expected, what happened, what you already tried, and what you think is going on. Time-box your
+     struggling — 30 to 60 minutes stuck is the point to ask, not day three.</p>
+
+  <h2>Security basics you are expected to know</h2>
+  <ul>
+    <li><strong>Never concatenate SQL.</strong> Use parameters — <code>WHERE id = ?</code> — or you have written an
+        injection vulnerability.</li>
+    <li><strong>Never log secrets</strong> — passwords, tokens, card numbers, full personal data.</li>
+    <li><strong>Never commit credentials.</strong> Environment variables or a secret manager; add
+        <code>.env</code> to <code>.gitignore</code>. If you do commit one, rotate it — deleting the commit is not
+        enough.</li>
+    <li><strong>Hash passwords with bcrypt or Argon2</strong>, never MD5 or SHA-256 alone.</li>
+    <li><strong>Validate all input at the boundary</strong> — anything from a client is hostile until checked.</li>
+    <li><strong>Keep dependencies updated;</strong> known vulnerabilities are the most common real-world breach.</li>
+  </ul>
+
+  <h2>Performance, in the right order</h2>
+  <ol>
+    <li>Make it correct.</li>
+    <li>Make it clear.</li>
+    <li>Measure — profile, time it, look at the query count.</li>
+    <li>Only then optimise the thing the measurement pointed at.</li>
+  </ol>
+  <p>In web applications the answer is almost never Java-level micro-optimisation. It is a missing database index, an
+     N+1 query, or a call in a loop that should have been one batch call.</p>
+
+  <h2>Reading a codebase you did not write</h2>
+  <p>Start at an entry point (a controller, a <code>main</code>) and follow one request all the way down. Use "find
+     usages" more than "read every file". Run the tests — they document intent. Change something small and see what
+     breaks; that tells you where the load-bearing walls are.</p>
+
+  <h2>A junior's checklist before opening a PR</h2>
+  <ul>
+    <li>Does it compile and do all tests pass locally?</li>
+    <li>Did I add tests for the new behaviour and for the edge cases?</li>
+    <li>Did I read my own diff line by line?</li>
+    <li>Any leftover <code>System.out.println</code>, <code>TODO</code>, or commented-out code?</li>
+    <li>Are names clear enough that a reviewer will not have to ask?</li>
+    <li>Does the error handling do something useful, or does it swallow?</li>
+    <li>Have I updated the README or docs if the behaviour changed?</li>
+  </ul>
+
+  <h2>Where to go next</h2>
+  <ul>
+    <li><strong><a href="../java-spring/index.html">The Spring course</a></strong> — the framework you will actually be
+        hired to use.</li>
+    <li><strong>SQL.</strong> Not optional. Joins, indexes, transactions, and reading an execution plan.</li>
+    <li><strong>HTTP and REST.</strong> Status codes, methods, headers, idempotency, caching.</li>
+    <li><strong>Docker.</strong> Enough to run a database locally and containerise your app.</li>
+    <li><strong>Books worth the time:</strong> <em>Effective Java</em> (Bloch) once you are comfortable;
+        <em>The Pragmatic Programmer</em> for the craft.</li>
+    <li><strong>Practice:</strong> build something real that you use. A finished small project teaches more than fifty
+        tutorials.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Take your oldest exercise from this course and refactor it: better names, smaller methods, no magic numbers,
+          tests added.</li>
+      <li>Make three commits with well-written messages and read back <code>git log</code> — would a stranger
+          understand the change?</li>
+      <li>Review a pull request in an open-source project and write one useful comment.</li>
+      <li>Use the debugger — not print statements — to find the value of a variable three calls deep.</li>
+      <li>Write a README for one of your projects: what it does, how to run it, how to test it.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

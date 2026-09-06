@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agents: the loop — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="13-agents-basics.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Agents: the loop</h1>
+  <p class="lead">An agent is a loop where the model decides what to do next. That is the whole idea — and the reason
+     they are powerful, expensive, and hard to make reliable.</p>
+
+  <h2>Workflow versus agent</h2>
+  <pre><code>WORKFLOW — you decide the steps, in code
+   classify(ticket) → retrieve(kb) → draft_reply() → validate() → send()
+   Predictable cost and latency. Testable. Debuggable. Fails in known ways.
+
+AGENT — the model decides the steps, in a loop
+   goal → [think → choose tool → observe result] × N → answer
+   Handles tasks you cannot enumerate in advance. Variable cost. Novel failures.</code></pre>
+  <div class="note">
+    <strong>Most production "AI agents" are workflows</strong>
+    And that is the correct choice. Use an agent when the sequence genuinely cannot be fixed ahead of time — research,
+    debugging, open-ended data work. If you can draw the flowchart, write the flowchart. It will be cheaper, faster,
+    and you will be able to test it.
+  </div>
+
+  <h2>The four questions before building one</h2>
+  <ol>
+    <li><strong>Complexity</strong> — is the task genuinely multi-step and impossible to specify in advance?</li>
+    <li><strong>Value</strong> — does the outcome justify higher cost and latency?</li>
+    <li><strong>Viability</strong> — is the model actually good at this kind of task today?</li>
+    <li><strong>Cost of error</strong> — can mistakes be caught and undone (tests, review, rollback)?</li>
+  </ol>
+  <p>Any "no" and you should stay with a workflow.</p>
+
+  <h2>ReAct: the pattern under almost every agent</h2>
+  <p>Reason → Act → Observe, repeated. In modern APIs you do not prompt this pattern by hand; tool calling implements
+     it, and the model's reasoning mode supplies the "reason" step.</p>
+  <pre><code>User: "Which of our overdue invoices are from customers who churned last quarter?"
+
+Thought:  I need overdue invoices first.
+Action:   search_invoices(status="overdue")
+Observe:  12 invoices, customer ids [...]
+Thought:  Now I need churn status for those customers.
+Action:   get_customers(ids=[...], fields=["churned_at"])
+Observe:  4 churned in Q1
+Thought:  I can answer now.
+Answer:   4 of the 12 overdue invoices belong to churned customers: ...</code></pre>
+
+  <h2>The loop, with the controls that matter</h2>
+  <pre><code>import time, anthropic
+
+client = anthropic.Anthropic()
+
+class Budget:
+    def __init__(self, max_iterations=12, max_tokens=200_000, max_seconds=120):
+        self.max_iterations, self.max_tokens, self.max_seconds = max_iterations, max_tokens, max_seconds
+        self.iterations, self.tokens, self.started = 0, 0, time.monotonic()
+
+    def check(self) -> str | None:
+        if self.iterations &gt;= self.max_iterations:      return "iteration limit reached"
+        if self.tokens &gt;= self.max_tokens:              return "token budget exhausted"
+        if time.monotonic() - self.started &gt; self.max_seconds: return "time limit reached"
+        return None
+
+
+def run_agent(goal: str, tools, execute, budget: Budget | None = None) -> dict:
+    budget = budget or Budget()
+    messages = [{"role": "user", "content": goal}]
+    trace = []
+
+    while True:
+        stop = budget.check()
+        if stop:
+            return {"status": "stopped", "reason": stop, "trace": trace}
+
+        response = client.messages.create(
+            model="claude-opus-5",
+            max_tokens=8000,
+            system=AGENT_SYSTEM,
+            thinking={"type": "adaptive"},
+            output_config={"effort": "high"},
+            tools=tools,
+            messages=messages,
+        )
+        budget.iterations += 1
+        budget.tokens += response.usage.input_tokens + response.usage.output_tokens
+
+        if response.stop_reason != "tool_use":
+            text = "".join(b.text for b in response.content if b.type == "text")
+            return {"status": "done", "answer": text, "trace": trace,
+                    "iterations": budget.iterations, "tokens": budget.tokens}
+
+        messages.append({"role": "assistant", "content": response.content})
+
+        results = []
+        for block in response.content:
+            if block.type != "tool_use":
+                continue
+            started = time.monotonic()
+            try:
+                output = execute(block.name, block.input)
+                is_error = False
+            except Exception as e:
+                output, is_error = f"Error: {e}", True
+            trace.append({
+                "tool": block.name, "input": block.input,
+                "ok": not is_error, "ms": int((time.monotonic() - started) * 1000),
+                "output_preview": str(output)[:200],
+            })
+            results.append({"type": "tool_result", "tool_use_id": block.id,
+                            "content": str(output), "is_error": is_error})
+
+        messages.append({"role": "user", "content": results})</code></pre>
+  <p>Everything that makes this production code rather than a demo is in the non-model parts: budgets, a trace, error
+     results instead of exceptions, and a structured return that says <em>why</em> it stopped.</p>
+
+  <h2>The agent's system prompt</h2>
+  <pre><code>AGENT_SYSTEM = """You are an operations assistant for a B2B SaaS company.
+
+Goal: answer the user's question using the tools available. Work in steps.
+
+Guidance:
+- Use tools to obtain facts. Never state a figure you did not retrieve.
+- Search before you conclude; if a result is empty, try a different query once,
+  then report that you found nothing.
+- Prefer one broad query over many narrow ones.
+- Before any action that writes data or contacts a customer, state what you are
+  about to do and wait for confirmation.
+- When you have enough information, stop and answer. Do not keep exploring.
+- If you cannot complete the task, say what you tried and what is blocking you.
+
+Answer format: a short direct answer first, then the supporting detail.
+"""</code></pre>
+  <p>Agents fail in two directions: stopping too early with a half-answer, and never stopping. Both are addressed here —
+     an explicit stop condition, and an explicit instruction to report failure rather than loop.</p>
+
+  <h2>Stopping conditions</h2>
+  <table>
+    <tr><td><strong>Natural</strong></td><td>The model answers without calling a tool. The normal case.</td></tr>
+    <tr><td><strong>Iteration cap</strong></td><td>Hard limit. Always present.</td></tr>
+    <tr><td><strong>Token / cost budget</strong></td><td>Stop before the bill surprises you. Some APIs also accept an
+        advisory task budget so the model paces itself.</td></tr>
+    <tr><td><strong>Wall clock</strong></td><td>Especially behind an HTTP request.</td></tr>
+    <tr><td><strong>Explicit finish tool</strong></td><td>A <code>submit_answer(answer, confidence)</code> tool makes
+        completion structured and unambiguous.</td></tr>
+    <tr><td><strong>Repetition detector</strong></td><td>Same tool, same arguments, three times → break the loop; the
+        agent is stuck.</td></tr>
+  </table>
+  <pre><code>from collections import Counter
+
+signatures = Counter()
+signature = (block.name, json.dumps(block.input, sort_keys=True))
+signatures[signature] += 1
+if signatures[signature] &gt;= 3:
+    results.append({"type": "tool_result", "tool_use_id": block.id, "is_error": True,
+                    "content": "You have called this tool with identical arguments three times. "
+                               "Try a different approach or report that you cannot proceed."})</code></pre>
+
+  <h2>Designing tools for agents</h2>
+  <p>Everything from lesson 7 applies, with extra emphasis because an agent uses tools unsupervised:</p>
+  <ul>
+    <li><strong>Errors must be instructive.</strong> "Error: unknown field 'customer'. Valid fields: customer_id,
+        status, total." lets the model recover; "Error: 400" does not.</li>
+    <li><strong>Results must be compact.</strong> They are resent on every subsequent turn — a fat result is a recurring
+        tax.</li>
+    <li><strong>Prefer few, powerful tools.</strong> A general <code>search(entity, filters)</code> often beats fifteen
+        specific ones.</li>
+    <li><strong>Gate writes.</strong> Reads are free; anything irreversible needs confirmation.</li>
+    <li><strong>Make tools idempotent</strong> where you can — agents retry.</li>
+  </ul>
+
+  <h2>Managing the agent's context</h2>
+  <p>A long run fills the window with tool results, most of which stop being relevant. Options, roughly in order of how
+     often you need them:</p>
+  <ul>
+    <li><strong>Return less</strong> from tools in the first place.</li>
+    <li><strong>Summarise or drop old tool results</strong> — some APIs offer server-side context editing that clears
+        stale results, or compaction that summarises earlier turns.</li>
+    <li><strong>Write to scratch storage</strong>: the agent saves findings to a file or a note tool and reads them back
+        on demand instead of carrying everything in context.</li>
+    <li><strong>Delegate</strong> a reading-heavy subtask to a subagent whose context you throw away, keeping only its
+        conclusion (lesson 14).</li>
+  </ul>
+
+  <h2>Observability is not optional here</h2>
+  <p>A single agent run may make twenty model calls and forty tool calls. Without a trace you cannot debug it at all.
+     Log, per step: the model call id, the reasoning summary if available, the tool name and arguments, the result size
+     and duration, and the running token count. Lesson 17 turns this into proper tracing.</p>
+  <pre><code>{"run_id": "a1b2", "step": 4, "tool": "search_invoices",
+ "input": {"status": "overdue"}, "ok": true, "ms": 84,
+ "tokens_so_far": 18432, "cost_so_far_usd": 0.21}</code></pre>
+
+  <h2>Typical failure modes</h2>
+  <table>
+    <tr><th>Failure</th><th>Fix</th></tr>
+    <tr><td>Loops on the same tool</td><td>Better tool results, repetition detector, iteration cap</td></tr>
+    <tr><td>Stops with a partial answer</td><td>Ask it to verify completeness before answering; add a
+        <code>submit_answer</code> tool with required fields</td></tr>
+    <tr><td>Invents data instead of calling a tool</td><td>State in the system prompt that tools are the only source of
+        truth; check the trace for claims with no supporting call</td></tr>
+    <tr><td>Runs up a huge bill</td><td>Budgets; a cheaper model for routine steps; fewer, larger tool calls</td></tr>
+    <tr><td>Takes a destructive action</td><td>Approval gates on writes; a dry-run mode; make it explain before
+        acting</td></tr>
+    <tr><td>Unreproducible bug</td><td>Store the full trace with every run so you can replay it</td></tr>
+  </table>
+
+  <h2>Evaluating agents</h2>
+  <p>Harder than evaluating a single call, because there are many valid paths to a correct answer. Measure:</p>
+  <ul>
+    <li><strong>Task success rate</strong> on a fixed set of goals with known outcomes — the headline number.</li>
+    <li><strong>Steps and cost per task</strong> — quality that costs three times as much is a trade, not a win.</li>
+    <li><strong>Tool-call correctness</strong> — did it use the right tool with sane arguments?</li>
+    <li><strong>Recovery rate</strong> — when a tool failed, did it adapt?</li>
+  </ul>
+  <p>Build the harness before you tune the prompt; otherwise you will be adjusting wording based on one anecdote at a
+     time. Lesson 16 covers how.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Build an agent over three tools (search the web or a local corpus, read a file, do arithmetic) with iteration,
+          token and time budgets.</li>
+      <li>Give it a task needing at least three steps, and print the full trace. Read it and check every claim in the
+          answer against a tool result.</li>
+      <li>Break a tool deliberately and observe whether the agent recovers or spirals. Improve the error message until
+          it recovers.</li>
+      <li>Add a repetition detector and force it to trigger.</li>
+      <li>Take the same task and implement it as a fixed workflow. Compare cost, latency and reliability over ten runs
+          — and decide honestly which you would ship.</li>
+      <li>Add an approval gate on a write tool and confirm nothing destructive happens without confirmation.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

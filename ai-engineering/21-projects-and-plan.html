@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portfolio projects and a plan — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="21-projects-and-plan.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Portfolio projects and a plan</h1>
+  <p class="lead">Three projects worth building, an eight-week schedule to build them alongside the lessons, and what
+     interviews actually ask.</p>
+
+  <h2>What makes a project count</h2>
+  <p>Recruiters and engineers look for different things. Engineers — the people who decide — look for evidence you have
+     dealt with the parts that are hard:</p>
+  <table>
+    <tr><td><strong>It runs</strong></td><td>One command, a README, seeded data or a demo mode. If a stranger cannot
+        start it in five minutes, it does not exist.</td></tr>
+    <tr><td><strong>It is measured</strong></td><td>An eval set and a results table. This is the strongest single
+        signal, and the rarest.</td></tr>
+    <tr><td><strong>It fails well</strong></td><td>Refuses when it should, handles empty results, degrades on
+        errors.</td></tr>
+    <tr><td><strong>It is honest</strong></td><td>A README section on limitations and what you would do next.</td></tr>
+    <tr><td><strong>You can defend it</strong></td><td>Every design decision has a reason you can state.</td></tr>
+  </table>
+  <p>Three good projects beat ten tutorials. A tutorial clone with a different colour scheme is worth nothing; nobody is
+     fooled.</p>
+
+  <h2>Project 1 — Document Q&amp;A with citations</h2>
+  <p><strong>The canonical AI-engineering project.</strong> Pick a corpus you genuinely care about: your country's
+     employment law, a game's rules, the documentation of a library you use, your own notes.</p>
+  <pre><code>Must have
+  ingestion (PDF/HTML/Markdown) with chunking and metadata
+  embeddings + vector store (pgvector), incremental re-indexing
+  hybrid search (vector + BM25) with RRF fusion
+  answers with inline citations that link to the source page
+  explicit "not in the documents" refusal
+  streaming API + a minimal UI
+  an eval set of 30+ questions and a results table
+
+Should have
+  a reranker, and the measured before/after numbers
+  question rewriting for follow-ups
+  cost and latency per question, logged and reported
+
+Stretch
+  multi-tenant with permission-filtered retrieval
+  contextual chunk prefixes at ingestion
+  a comparison table of 3–4 retrieval configurations</code></pre>
+  <p><strong>What it demonstrates:</strong> the entire RAG stack, plus that you measure. Lessons 8–12, 16, 20.</p>
+
+  <h2>Project 2 — An agent with real tools</h2>
+  <p>Something that does work, not just answers. Good briefs: a GitHub triage assistant (read issues, search the
+     codebase, propose labels and a first response), a personal finance agent over your bank export, a research agent
+     that browses and writes a cited brief, a DevOps assistant that reads logs and metrics.</p>
+  <pre><code>Must have
+  3–6 well-designed tools with real side effects (at least one write)
+  a bounded loop: iteration, token and time budgets
+  a full trace of every run, persisted
+  human approval on irreversible actions
+  graceful handling of tool failures
+  a task-success eval over 15+ fixed goals
+
+Should have
+  a comparison against the equivalent fixed workflow, with numbers
+  cost per completed task
+  a dry-run mode
+
+Stretch
+  MCP integration
+  a subagent for a reading-heavy step
+  resumable runs (checkpointing) with a pause for approval</code></pre>
+  <p><strong>What it demonstrates:</strong> tool design, loop control, safety judgement. Lessons 7, 13, 14, 18.</p>
+
+  <h2>Project 3 — Structured extraction at volume</h2>
+  <p>The least glamorous and often the most employable, because it is what companies actually pay for. Invoices, CVs,
+     contracts, scientific abstracts, job adverts, receipts — messy input, structured output, at scale.</p>
+  <pre><code>Must have
+  a Pydantic schema with enums, optionals and validation
+  structured output with schema enforcement
+  business validation beyond the schema (cross-checks against the source)
+  batch processing with bounded concurrency
+  an accuracy eval on 50 hand-labelled documents, field by field
+  a cost-per-document figure
+
+Should have
+  a model comparison: frontier vs cheap vs small open model, accuracy and cost
+  a repair loop, with the repair rate reported
+  handling of scanned documents (multimodal or OCR)
+
+Stretch
+  a small review UI for low-confidence extractions
+  a distillation experiment (lesson 19)</code></pre>
+  <p><strong>What it demonstrates:</strong> reliability, evaluation and cost engineering. Lessons 6, 16, 17, 19.</p>
+
+  <h2>The README that makes a project count</h2>
+  <pre><code># Docs Assistant
+
+Ask questions about &lt;corpus&gt; and get answers with citations.
+
+## Demo
+[30-second GIF or a link]
+
+## Run it
+docker compose up
+open http://localhost:8000
+
+## How it works
+[one diagram: ingest → chunk → embed → hybrid search → rerank → answer]
+
+## Results
+| configuration          | recall@5 | accuracy | faithfulness | p95 latency | cost/query |
+|------------------------|----------|----------|--------------|-------------|------------|
+| vector only, k=5       | 0.61     | 0.68     | 0.85         | 1.9 s       | $0.008     |
+| + BM25 hybrid (RRF)    | 0.84     | 0.82     | 0.91         | 2.0 s       | $0.008     |
+| + cross-encoder rerank | 0.91     | 0.88     | 0.94         | 2.3 s       | $0.009     |
+
+Eval set: 40 questions (evals/dataset.jsonl), graded by programmatic checks
+plus an LLM judge validated against 20 hand-graded cases (85% agreement).
+
+## Design decisions
+- 800-token chunks split on headings: 300 fragmented tables, 1500 diluted retrieval.
+- pgvector over a dedicated vector DB: one datastore, real joins, transactions.
+- Rerank only the top 50: +7 points recall for ~240 ms.
+
+## Limitations
+- Scanned PDFs are not OCR'd.
+- Single tenant.
+- Tables are flattened; numeric questions over tables are unreliable.</code></pre>
+  <p>That results table is the artifact. It says: this person measures, compares and trades off — which is precisely the
+     job.</p>
+
+  <h2>An eight-week plan</h2>
+  <p>Assumes roughly 10–15 hours a week alongside a job. Compress it if you have more time; do not skip the evaluation
+     weeks.</p>
+  <table>
+    <tr><th>Week</th><th>Lessons</th><th>Build</th></tr>
+    <tr><td><strong>1</strong></td><td>1–4</td><td>Environment set up. A CLI chat with history, streaming, cost
+        logging, and the <code>complete()</code> wrapper. First cost report.</td></tr>
+    <tr><td><strong>2</strong></td><td>5–7</td><td>Prompts in files with versions. A structured extractor for one
+        document type. A three-tool agent over a toy database.</td></tr>
+    <tr><td><strong>3</strong></td><td>8–10</td><td>Choose the corpus for project 1. Ingestion, chunking, embeddings,
+        pgvector. Semantic search working from the command line.</td></tr>
+    <tr><td><strong>4</strong></td><td>11–12</td><td>Full RAG with citations. 30-question labelled set. Baseline
+        recall@5. Add hybrid search and a reranker; record the deltas.</td></tr>
+    <tr><td><strong>5</strong></td><td>16</td><td>Proper eval harness with an LLM judge, validated against hand
+        grading. CI running the fast subset. Write the results table.</td></tr>
+    <tr><td><strong>6</strong></td><td>13–15</td><td>Project 2: the agent, with budgets, traces and approval gates.
+        Build the equivalent workflow and compare them.</td></tr>
+    <tr><td><strong>7</strong></td><td>17–18</td><td>Tracing, cost dashboard, caching, budgets. Attack your own
+        systems; fix what gets through; add the adversarial suite.</td></tr>
+    <tr><td><strong>8</strong></td><td>19–20</td><td>Project 3 (extraction, with a model comparison). Containerise and
+        deploy project 1. READMEs, diagrams, results tables. Publish.</td></tr>
+  </table>
+  <div class="note">
+    <strong>If you only have four weeks</strong>
+    Weeks 1–5 compressed, then deploy project 1 properly. One finished, measured, deployed RAG project with an honest
+    README beats three half-built repositories every time.
+  </div>
+
+  <h2>Keeping current without drowning</h2>
+  <ul>
+    <li>Read the primary docs of the provider you use — the changelog and the migration guides especially.</li>
+    <li>Follow a handful of practitioners rather than the whole timeline. Most "breakthroughs" do not change your
+        work.</li>
+    <li>When a new model lands, run <em>your</em> eval set on it. That is your signal, not a benchmark chart.</li>
+    <li>Re-read your prompts after every model upgrade; instructions written for the old model quietly degrade the new
+        one.</li>
+    <li>Budget an hour a week for this and no more. Building beats reading.</li>
+  </ul>
+
+  <h2>Interview preparation</h2>
+  <h3>Questions you should be able to answer cold</h3>
+  <ul>
+    <li>What is the difference between an AI engineer and an ML engineer?</li>
+    <li>Explain RAG to a non-technical stakeholder. Now explain why it is not always the answer.</li>
+    <li>How do you chunk documents, and how did you choose the size?</li>
+    <li>Your RAG system gives a wrong answer. Walk me through debugging it.</li>
+    <li>How do you know a prompt change made things better?</li>
+    <li>What is prompt injection, and how would you defend an agent that reads customer emails?</li>
+    <li>When would you fine-tune rather than use RAG?</li>
+    <li>How do you control cost in an LLM product?</li>
+    <li>What is the difference between a workflow and an agent, and which have you shipped?</li>
+    <li>How would you evaluate an agent when several paths are valid?</li>
+  </ul>
+  <p>For every one of those, answer with something you actually did, with a number in it. "We measured recall@5 at 0.61,
+     added hybrid search, and got to 0.84" ends the question. "I read that hybrid search helps" invites three more.</p>
+
+  <h3>The take-home</h3>
+  <p>Common brief: "build a small RAG or extraction service over this data". What separates the top submissions is never
+     cleverness — it is a README, an eval, honest limitations, error handling, and code someone else can read. Ship
+     something modest and complete rather than ambitious and broken, and write down what you would do with another
+     week.</p>
+
+  <h3>What to have ready</h3>
+  <ul>
+    <li>Three repositories, each with a README and a results table.</li>
+    <li>A short demo — a GIF or a deployed URL — for at least one.</li>
+    <li>A written story for each project: the problem, three decisions and their trade-offs, what you measured, what you
+        would change.</li>
+    <li>One honest failure you learned from. Interviewers ask, and "nothing went wrong" is not a credible answer.</li>
+  </ul>
+
+  <h2>Where to go after this course</h2>
+  <ul>
+    <li><strong>Depth in retrieval</strong> — information retrieval fundamentals, learned sparse retrieval, evaluation
+        methodology. This is the durable specialism.</li>
+    <li><strong>Depth in evaluation</strong> — the skill teams most consistently lack, and the fastest route to being
+        the person who is trusted.</li>
+    <li><strong>Backend fundamentals</strong> if they are thin: SQL, queues, Docker, a cloud. The
+        <a href="../java-spring/index.html">Spring course</a> covers the same ideas from another angle.</li>
+    <li><strong>A little ML literacy</strong> — enough to read a model card and a benchmark critically, without
+        pretending to be an ML engineer.</li>
+    <li><strong>Ship something real</strong>, to real users, even ten of them. Everything you learn from that is
+        unavailable any other way.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Pick the corpus for project 1 today. Not tomorrow — indecision here is the most common reason people never
+          start.</li>
+      <li>Write the README for project 1 <em>before</em> you build it, including the empty results table. Then fill the
+          table in as you go.</li>
+      <li>Put the eight-week plan in your calendar with two fixed sessions a week.</li>
+      <li>After each project, write the three-decision story. Rehearse it out loud once.</li>
+      <li>Send project 1 to one experienced developer and ask for honest criticism. Act on it.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

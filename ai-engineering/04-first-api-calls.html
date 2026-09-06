@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Calling an LLM API — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="04-first-api-calls.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Calling an LLM API</h1>
+  <p class="lead">The request shape, streaming, errors, retries and cost accounting — the boring layer that decides
+     whether your app survives contact with real traffic.</p>
+
+  <h2>Setup</h2>
+  <pre><code>uv add anthropic
+# key in .env as ANTHROPIC_API_KEY; the SDK reads it from the environment</code></pre>
+
+  <h2>The basic request</h2>
+  <pre><code>import anthropic
+
+client = anthropic.Anthropic()
+
+response = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=16000,
+    system="You are a concise technical assistant. Prefer bullet points.",
+    messages=[
+        {"role": "user", "content": "Explain vector embeddings in three sentences."}
+    ],
+)
+
+for block in response.content:
+    if block.type == "text":
+        print(block.text)</code></pre>
+  <p>Three things to notice, because they generalise:</p>
+  <ul>
+    <li><strong>The conversation is a list of messages</strong> with roles. Every provider works this way.</li>
+    <li><strong>The system prompt is separate</strong> from the conversation and frames all of it.</li>
+    <li><strong>The response is a list of content blocks</strong>, not a string. A response can contain text, reasoning
+        and tool calls together — always check <code>block.type</code> rather than assuming
+        <code>content[0].text</code>.</li>
+  </ul>
+
+  <h3>What the response carries</h3>
+  <pre><code>response.id            # message id — log it
+response.model         # which model actually served the request
+response.stop_reason   # end_turn | max_tokens | tool_use | refusal | ...
+response.usage.input_tokens
+response.usage.output_tokens</code></pre>
+  <p><code>stop_reason</code> deserves a check on every path. <code>max_tokens</code> means the answer was cut off
+     mid-thought — if you parse that as JSON it will fail, and the cause will not be obvious.</p>
+
+  <h2>Multi-turn conversations</h2>
+  <pre><code>messages = []
+
+def ask(user_text: str) -> str:
+    messages.append({"role": "user", "content": user_text})
+    response = client.messages.create(
+        model="claude-opus-5",
+        max_tokens=4000,
+        system=SYSTEM_PROMPT,
+        messages=messages,
+    )
+    answer = next(b.text for b in response.content if b.type == "text")
+    messages.append({"role": "assistant", "content": answer})
+    return answer
+
+ask("My name is Ana.")
+ask("What is my name?")     # works only because the history is resent</code></pre>
+  <p>Since you resend everything, a long conversation grows linearly in cost. Strategies when it gets long: keep the
+     last N turns, summarise older ones into a compact note, or use the provider's server-side compaction. Decide this
+     early — retro-fitting it into a chat product is unpleasant.</p>
+
+  <h2>Streaming</h2>
+  <p>Users judge a chat interface by time-to-first-token, not total time. Stream anything a human is waiting on.</p>
+  <pre><code>with client.messages.stream(
+    model="claude-opus-5",
+    max_tokens=64000,
+    messages=[{"role": "user", "content": "Write a short guide to RAG."}],
+) as stream:
+    for text in stream.text_stream:
+        print(text, end="", flush=True)
+
+    final = stream.get_final_message()     # full message once done
+    print(final.usage.output_tokens)</code></pre>
+  <p>Streaming is also how you avoid HTTP timeouts on long generations — a non-streaming request with a very large
+     <code>max_tokens</code> can exceed the client timeout before it produces anything. Lesson 20 covers pushing this
+     stream on to a browser over SSE.</p>
+
+  <h2>Errors and retries</h2>
+  <pre><code>import anthropic
+
+try:
+    response = client.messages.create(...)
+except anthropic.BadRequestError as e:          # 400 — your request is wrong; do not retry
+    log.error("bad request: %s", e.message)
+    raise
+except anthropic.AuthenticationError:            # 401 — bad or missing key
+    raise
+except anthropic.RateLimitError as e:            # 429 — back off
+    retry_after = int(e.response.headers.get("retry-after", "60"))
+    ...
+except anthropic.APIStatusError as e:            # 5xx — transient, retry
+    if e.status_code &gt;= 500:
+        ...
+except anthropic.APIConnectionError:             # network
+    ...</code></pre>
+  <p>The SDK already retries connection errors, 408, 409, 429 and 5xx with exponential backoff (two retries by default);
+     tune it rather than reimplementing it:</p>
+  <pre><code>client = anthropic.Anthropic(max_retries=4, timeout=30.0)
+
+# or per call
+client.with_options(timeout=10.0).messages.create(...)</code></pre>
+  <p>Two habits worth forming now: set an explicit timeout (the default is minutes, which is not what you want behind a
+     web request), and never retry a 400 — the request is malformed and will fail identically forever.</p>
+
+  <h2>Counting tokens and estimating cost</h2>
+  <pre><code>count = client.messages.count_tokens(
+    model="claude-opus-5",
+    system=SYSTEM_PROMPT,
+    messages=messages,
+)
+print(count.input_tokens)
+
+INPUT_PER_TOKEN  = 5.00 / 1_000_000     # claude-opus-5
+OUTPUT_PER_TOKEN = 25.00 / 1_000_000
+
+def cost(usage) -> float:
+    return usage.input_tokens * INPUT_PER_TOKEN + usage.output_tokens * OUTPUT_PER_TOKEN</code></pre>
+  <p>Log <code>usage</code> for every call from day one, tagged with the feature that made it. Without that you cannot
+     answer "which feature costs us the most", which is the first question anyone will ask when the bill arrives.</p>
+
+  <h2>Prompt caching</h2>
+  <p>When many requests share a long identical prefix — a big system prompt, a document, a fixed tool list — you can
+     have the provider cache it. Cached input is dramatically cheaper and faster to process.</p>
+  <pre><code>response = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=4000,
+    cache_control={"type": "ephemeral"},   # cache the stable prefix
+    system=LONG_STABLE_SYSTEM_PROMPT,
+    messages=[{"role": "user", "content": question}],
+)
+
+print(response.usage.cache_creation_input_tokens)   # written to cache
+print(response.usage.cache_read_input_tokens)       # served from cache — the win</code></pre>
+  <div class="warn">
+    <strong>Caching is a prefix match</strong>
+    One changed byte anywhere in the prefix invalidates everything after it. A timestamp, a UUID, an unsorted
+    <code>json.dumps</code> or a tool list built from a set will silently destroy your hit rate. Keep the stable content
+    first and the volatile content last, and verify with <code>cache_read_input_tokens</code> — if it stays zero across
+    repeated calls, something is invalidating.
+  </div>
+
+  <h2>Wrapping the client</h2>
+  <p>Do not scatter raw SDK calls across your codebase. One module owns model access, and everything else calls that:</p>
+  <pre><code># app/llm.py
+import anthropic, logging, time
+
+client = anthropic.Anthropic(max_retries=3, timeout=30.0)
+log = logging.getLogger(__name__)
+
+def complete(
+    prompt: str,
+    *,
+    system: str | None = None,
+    model: str = "claude-opus-5",
+    max_tokens: int = 4000,
+    feature: str = "unknown",
+) -> str:
+    started = time.perf_counter()
+    response = client.messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        system=system,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    log.info(
+        "llm_call feature=%s model=%s in=%d out=%d stop=%s ms=%d",
+        feature, model,
+        response.usage.input_tokens, response.usage.output_tokens,
+        response.stop_reason, (time.perf_counter() - started) * 1000,
+    )
+    if response.stop_reason == "max_tokens":
+        log.warning("truncated response for feature=%s", feature)
+    return "".join(b.text for b in response.content if b.type == "text")</code></pre>
+  <p>That one function gives you a single place to add tracing, caching, model routing, a circuit breaker, or a swap to
+     another provider. Building it on day one costs ten minutes and saves a refactor later.</p>
+
+  <h2>What is portable between providers</h2>
+  <table>
+    <tr><th>Concept</th><th>Portable?</th></tr>
+    <tr><td>Roles, message list, system prompt</td><td>Yes — universal</td></tr>
+    <tr><td>Streaming</td><td>Yes, with different event shapes</td></tr>
+    <tr><td>Tool / function calling</td><td>Conceptually yes; schemas and field names differ</td></tr>
+    <tr><td>Structured output via JSON schema</td><td>Conceptually yes; parameter names differ</td></tr>
+    <tr><td>Token counting, caching, batch endpoints</td><td>Provider-specific</td></tr>
+    <tr><td>Reasoning / effort controls</td><td>Provider-specific, and changing fast</td></tr>
+    <tr><td>Model IDs, pricing, limits</td><td>No</td></tr>
+  </table>
+  <p>This is why the wrapper above matters, and why an abstraction layer (lesson 15) is sometimes worth it — and
+     sometimes just an extra dependency between you and the docs.</p>
+
+  <h2>Rate limits</h2>
+  <p>Providers limit requests per minute and tokens per minute. Under load you will see 429s. The fixes are ordinary
+     engineering: bound your concurrency with a semaphore, retry with exponential backoff and jitter, queue work that
+     is not interactive, and use a batch endpoint for anything that can wait — batch pricing is typically about half.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Make your first call, print the text and the usage, and compute the cost of that single call.</li>
+      <li>Build a command-line chat that keeps history, streams the answer, and prints running total cost after every
+          turn.</li>
+      <li>Trigger three different errors on purpose: an invalid model id, a missing key, and a
+          <code>max_tokens</code> so small the answer is cut off. Handle each distinctly.</li>
+      <li>Send the same 5,000-token document twice with caching enabled and compare
+          <code>cache_read_input_tokens</code> on the second call. Then break the cache by adding a timestamp to the
+          system prompt and observe it drop to zero.</li>
+      <li>Write the <code>complete()</code> wrapper with structured logging and use it for everything from here on.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

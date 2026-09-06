@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Persistence with Spring Data JPA — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="08-data-jpa.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Persistence with Spring Data JPA</h1>
+  <p class="lead">Java objects in, rows out. JPA saves an enormous amount of boilerplate — and hides enough that you
+     must know what it is doing.</p>
+
+  <h2>The vocabulary</h2>
+  <table>
+    <tr><td><strong>JPA</strong></td><td>The specification: annotations and an API for object-relational mapping</td></tr>
+    <tr><td><strong>Hibernate</strong></td><td>The implementation Spring Boot uses</td></tr>
+    <tr><td><strong>Spring Data JPA</strong></td><td>A layer that generates repository implementations for you</td></tr>
+    <tr><td><strong>EntityManager</strong></td><td>Hibernate's session: tracks loaded entities and flushes changes</td></tr>
+  </table>
+
+  <h2>Setup</h2>
+  <pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-data-jpa&lt;/artifactId&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+    &lt;groupId&gt;org.postgresql&lt;/groupId&gt;
+    &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+    &lt;scope&gt;runtime&lt;/scope&gt;
+&lt;/dependency&gt;</code></pre>
+  <pre><code>spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/tasks
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+  jpa:
+    hibernate:
+      ddl-auto: validate        # see the warning below
+    open-in-view: false         # turn this off — see lesson 9
+    properties:
+      hibernate:
+        format_sql: true
+logging:
+  level:
+    org.hibernate.SQL: DEBUG</code></pre>
+  <div class="warn">
+    <strong>ddl-auto</strong>
+    <code>update</code> is convenient and dangerous: it silently alters your schema and never removes anything. Use
+    <code>validate</code> with real migrations (lesson 10). <code>create-drop</code> is for tests only.
+    <strong>Never</strong> point <code>create</code> or <code>update</code> at a production database.
+  </div>
+
+  <h2>An entity</h2>
+  <pre><code>@Entity
+@Table(name = "tasks")
+public class Task {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, length = 200)
+    private String title;
+
+    @Column(columnDefinition = "text")
+    private String description;
+
+    @Enumerated(EnumType.STRING)               // never ORDINAL — reordering the enum corrupts data
+    @Column(nullable = false)
+    private TaskStatus status = TaskStatus.TODO;
+
+    private LocalDate dueDate;
+
+    @Column(nullable = false, updatable = false)
+    private Instant createdAt;
+
+    @Version                                    // optimistic locking
+    private Long version;
+
+    protected Task() { }                        // JPA needs a no-arg constructor
+
+    public Task(String title, LocalDate dueDate) {
+        this.title = title;
+        this.dueDate = dueDate;
+        this.createdAt = Instant.now();
+    }
+
+    // getters, and setters only for what may actually change
+}</code></pre>
+  <p>Rules that save pain later:</p>
+  <ul>
+    <li>Entities are mutable classes, <strong>not records</strong> — JPA needs a no-arg constructor and proxies.</li>
+    <li>Use wrapper types (<code>Long</code>, not <code>long</code>) for ids so "not yet saved" is <code>null</code>.</li>
+    <li>Do not put <code>@Data</code> (Lombok) on an entity: the generated <code>equals</code>,
+        <code>hashCode</code> and <code>toString</code> touch lazy associations and cause real bugs.</li>
+    <li>If you need <code>equals</code>, base it on a business key or the id with a null-safe check.</li>
+  </ul>
+
+  <h3>Auditing timestamps automatically</h3>
+  <pre><code>@EnableJpaAuditing            // on a @Configuration class
+
+@EntityListeners(AuditingEntityListener.class)
+@Entity
+public class Task {
+    @CreatedDate  private Instant createdAt;
+    @LastModifiedDate private Instant updatedAt;
+}</code></pre>
+
+  <h2>The repository</h2>
+  <pre><code>public interface TaskRepository extends JpaRepository&lt;Task, Long&gt; { }</code></pre>
+  <p>That is the whole implementation. You now have:</p>
+  <pre><code>save(entity)            saveAll(entities)
+findById(id) → Optional findAll()          findAllById(ids)
+existsById(id)          count()
+deleteById(id)          delete(entity)     deleteAll()
+findAll(Pageable)       findAll(Sort)</code></pre>
+
+  <h3>Derived query methods</h3>
+  <p>Spring parses the method name and writes the query:</p>
+  <pre><code>public interface TaskRepository extends JpaRepository&lt;Task, Long&gt; {
+
+    List&lt;Task&gt; findByStatus(TaskStatus status);
+    List&lt;Task&gt; findByStatusAndDueDateBefore(TaskStatus status, LocalDate date);
+    List&lt;Task&gt; findByTitleContainingIgnoreCase(String fragment);
+    Optional&lt;Task&gt; findFirstByOrderByCreatedAtDesc();
+    List&lt;Task&gt; findByDueDateBetween(LocalDate from, LocalDate to);
+    List&lt;Task&gt; findByStatusIn(Collection&lt;TaskStatus&gt; statuses);
+    boolean existsByTitle(String title);
+    long countByStatus(TaskStatus status);
+    void deleteByStatus(TaskStatus status);
+    Page&lt;Task&gt; findByStatus(TaskStatus status, Pageable pageable);
+}</code></pre>
+  <p>Keywords: <code>And Or Between LessThan GreaterThan After Before IsNull IsNotNull Like Containing StartingWith
+     In NotIn True False IgnoreCase OrderBy Distinct Top10 First</code>.</p>
+  <p>A typo in a property name fails at <em>startup</em>, not at runtime — that is a feature. When a method name grows
+     past about four conditions, switch to <code>@Query</code>.</p>
+
+  <h3>@Query</h3>
+  <pre><code>// JPQL — operates on entities and fields, not tables and columns
+@Query("select t from Task t where t.status = :status and t.dueDate &lt; :date")
+List&lt;Task&gt; findOverdue(@Param("status") TaskStatus status, @Param("date") LocalDate date);
+
+// projection straight into a DTO
+@Query("""
+       select new com.example.tasks.dto.TaskSummary(t.status, count(t))
+       from Task t group by t.status
+       """)
+List&lt;TaskSummary&gt; summariseByStatus();
+
+// native SQL when you need database-specific features
+@Query(value = "select * from tasks where title % :term", nativeQuery = true)
+List&lt;Task&gt; fuzzySearch(@Param("term") String term);
+
+@Modifying
+@Transactional
+@Query("update Task t set t.status = :status where t.id = :id")
+int updateStatus(@Param("id") Long id, @Param("status") TaskStatus status);</code></pre>
+
+  <h3>Projections</h3>
+  <pre><code>// interface projection — Spring selects only these columns
+public interface TaskTitleView {
+    Long getId();
+    String getTitle();
+}
+List&lt;TaskTitleView&gt; findByStatus(TaskStatus status);
+
+// record projection
+public record TaskSummary(TaskStatus status, long count) { }</code></pre>
+  <p>Selecting whole entities when you need two fields is a common and avoidable waste.</p>
+
+  <h2>Paging and sorting</h2>
+  <pre><code>Page&lt;Task&gt; page = repository.findAll(PageRequest.of(0, 20, Sort.by("dueDate").ascending()));
+
+page.getContent();        // List&lt;Task&gt;
+page.getTotalElements();  // total rows (costs an extra count query)
+page.getTotalPages();
+page.hasNext();
+
+Slice&lt;Task&gt; slice = repository.findByStatus(status, pageable);   // no count query — cheaper</code></pre>
+
+  <h2>How save actually behaves</h2>
+  <pre><code>@Transactional
+public void rename(Long id, String newTitle) {
+    Task task = repository.findById(id).orElseThrow();
+    task.setTitle(newTitle);
+    // no save() call — the entity is "managed", and Hibernate flushes the change on commit
+}</code></pre>
+  <p>Inside a transaction, entities loaded from the repository are tracked; changing a field schedules an UPDATE. This
+     is <strong>dirty checking</strong>, and it surprises people in both directions: forgetting that changes persist,
+     and expecting them to persist outside a transaction, where they do not.</p>
+  <p><code>save()</code> inserts when the id is null and merges otherwise. It returns the managed instance — always use
+     the returned object.</p>
+
+  <h2>Testing the repository</h2>
+  <pre><code>@DataJpaTest                          // only the JPA slice, with a test database, rolled back after each test
+class TaskRepositoryTest {
+
+    @Autowired TaskRepository repository;
+
+    @Test
+    void findsOverdueTasks() {
+        repository.save(new Task("late", LocalDate.now().minusDays(1)));
+        repository.save(new Task("future", LocalDate.now().plusDays(5)));
+
+        List&lt;Task&gt; overdue = repository.findByDueDateBefore(LocalDate.now());
+
+        assertThat(overdue).hasSize(1).extracting(Task::getTitle).containsExactly("late");
+    }
+}</code></pre>
+
+  <h2>Things that bite juniors</h2>
+  <ul>
+    <li><strong>Every derived query returns a list you did not page.</strong> Page anything unbounded.</li>
+    <li><strong><code>findAll()</code> on a large table</strong> loads it all into memory.</li>
+    <li><strong>Calling the repository in a loop</strong> instead of <code>findAllById</code> — one query beats a
+        thousand.</li>
+    <li><strong>Not looking at the SQL.</strong> Turn on <code>org.hibernate.SQL</code> logging and read what your code
+        actually executes. Almost every performance problem is visible there.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Turn your in-memory task store into a real <code>@Entity</code> + <code>JpaRepository</code>, running against
+          H2 first.</li>
+      <li>Add five derived queries, including one with paging and one with <code>Containing</code>.</li>
+      <li>Write a <code>@Query</code> that returns a DTO projection of status counts.</li>
+      <li>Turn on SQL logging and count the queries your list endpoint issues.</li>
+      <li>Write a <code>@DataJpaTest</code> for two repository methods.</li>
+      <li>Modify an entity inside a transactional service method without calling <code>save</code>, and confirm the
+          change is persisted.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

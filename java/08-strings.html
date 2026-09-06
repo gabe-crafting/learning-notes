@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strings and text — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="08-strings.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Strings and text</h1>
+  <p class="lead">Strings are objects, they are immutable, and that single fact explains most of their behaviour.</p>
+
+  <h2>Creating strings</h2>
+  <pre><code>String a = "hello";                  // literal — goes into the string pool
+String b = new String("hello");      // new object every time — avoid
+String c = String.valueOf(42);       // "42"
+String d = "";                       // empty, not null</code></pre>
+
+  <h2>Immutability</h2>
+  <pre><code>String s = "hello";
+s.toUpperCase();                     // returns "HELLO" — s is unchanged
+System.out.println(s);               // hello
+
+s = s.toUpperCase();                 // reassignment is how you "change" a string
+System.out.println(s);               // HELLO</code></pre>
+  <p>Every String method returns a <em>new</em> string. Forgetting to use the return value is one of the most common
+     beginner bugs.</p>
+  <p>Immutability is why strings are safe to share across threads, safe as map keys, and why the JVM can pool identical
+     literals.</p>
+
+  <h2>Comparing strings</h2>
+  <pre><code>String x = "hello";
+String y = "hello";
+String z = new String("hello");
+
+x == y                    // true  — both point at the same pooled literal
+x == z                    // false — different objects
+x.equals(z)               // true  — same characters  ← use this
+x.equalsIgnoreCase("HELLO")  // true
+x.compareTo("world")      // negative: "hello" sorts before "world"</code></pre>
+  <div class="warn">
+    <strong>Never compare strings with ==</strong>
+    It happens to work for literals, which makes the bug survive testing and appear in production the moment a string
+    arrives from a file, a database or a web request.
+  </div>
+  <p>Guarding against null, put the constant first:</p>
+  <pre><code>if ("admin".equals(role)) { ... }        // safe even when role is null
+if (Objects.equals(a, b)) { ... }        // safe both ways</code></pre>
+
+  <h2>The methods you will actually use</h2>
+  <pre><code>String s = "  Hello, World  ";
+
+s.length()                    // 17
+s.trim()                      // "Hello, World"  (removes ASCII whitespace)
+s.strip()                     // same, Unicode-aware (Java 11+) — prefer this
+s.isEmpty()                   // length == 0
+s.isBlank()                   // empty or only whitespace (Java 11+)
+
+"Hello".charAt(0)             // 'H'
+"Hello".indexOf("l")          // 2      (-1 if not found)
+"Hello".lastIndexOf("l")      // 3
+"Hello".contains("ell")       // true
+"Hello".startsWith("He")      // true
+"Hello".endsWith("lo")        // true
+
+"Hello".substring(2)          // "llo"
+"Hello".substring(1, 3)       // "el"   (start inclusive, end exclusive)
+"Hello".replace('l', 'L')     // "HeLLo"
+"a,b,c".split(",")            // ["a", "b", "c"]
+String.join("-", "a", "b")    // "a-b"
+"Hello".toUpperCase()         // "HELLO"
+"ab".repeat(3)                // "ababab"  (Java 11+)
+"a\nb".lines()                // stream of lines (Java 11+)
+"Hello".toCharArray()         // ['H','e','l','l','o']</code></pre>
+
+  <h2>Escapes and text blocks</h2>
+  <pre><code>String quote = "She said \"hi\"";
+String path  = "C:\\Users\\gabe";     // backslash must be escaped
+String multi = "line one\nline two";  // \n newline, \t tab, \\ backslash</code></pre>
+  <p>Java 15+ has text blocks, which make embedded JSON, SQL and HTML readable:</p>
+  <pre><code>String json = """
+    {
+      "name": "Ada",
+      "role": "engineer"
+    }
+    """;</code></pre>
+  <p>Indentation common to all lines is stripped, so the block lines up with your code without polluting the value.</p>
+
+  <h2>Building strings efficiently</h2>
+  <pre><code>// bad in a loop: creates a new String on every iteration
+String result = "";
+for (String word : words) {
+    result += word + " ";
+}
+
+// good: one mutable buffer
+StringBuilder sb = new StringBuilder();
+for (String word : words) {
+    sb.append(word).append(' ');
+}
+String result = sb.toString();</code></pre>
+  <p>For a handful of concatenations, <code>+</code> is fine — the compiler optimises it. Inside a loop, use
+     <code>StringBuilder</code>. (<code>StringBuffer</code> is the thread-safe, slower twin; you almost never need it.)</p>
+  <p>Joining a collection is nicer still:</p>
+  <pre><code>String csv = String.join(", ", names);
+String csv2 = names.stream().collect(Collectors.joining(", ", "[", "]"));</code></pre>
+
+  <h2>Formatting</h2>
+  <pre><code>String.format("%s is %d years old", "Ada", 36)   // "Ada is 36 years old"
+String.format("%.2f", 3.14159)                    // "3.14"
+String.format("%,d", 1234567)                     // "1,234,567"
+String.format("%5d|", 42)                         // "   42|"  right-aligned width 5
+String.format("%-5d|", 42)                        // "42   |"  left-aligned
+System.out.printf("%s: %d%n", "count", 7);        // printf writes directly, %n = newline
+
+"Hello %s".formatted("world")                     // Java 15+, same as String.format</code></pre>
+  <table>
+    <tr><td><code>%s</code></td><td>any object (calls <code>toString()</code>)</td></tr>
+    <tr><td><code>%d</code></td><td>integer</td></tr>
+    <tr><td><code>%f</code></td><td>floating point</td></tr>
+    <tr><td><code>%b</code></td><td>boolean</td></tr>
+    <tr><td><code>%n</code></td><td>platform newline</td></tr>
+    <tr><td><code>%%</code></td><td>a literal percent sign</td></tr>
+  </table>
+
+  <h2>Parsing and converting</h2>
+  <pre><code>int n = Integer.parseInt("42");            // NumberFormatException if not numeric
+double d = Double.parseDouble("3.14");
+String s = String.valueOf(42);
+String t = Integer.toString(42);
+char c = "abc".charAt(1);
+int digit = Character.getNumericValue('7');  // 7
+Character.isDigit('7')     Character.isLetter('a')     Character.toUpperCase('a')</code></pre>
+
+  <h2>Characters, code points and encoding</h2>
+  <p>A <code>char</code> is 16 bits — enough for most characters, but emoji and some scripts need two chars (a
+     "surrogate pair"). So <code>"👋".length()</code> is 2. When correctness matters for non-Latin text, work with code
+     points:</p>
+  <pre><code>"👋".codePointCount(0, "👋".length())    // 1
+text.codePoints().forEach(...);</code></pre>
+  <p>When reading or writing files, always state the charset — <code>StandardCharsets.UTF_8</code> — rather than relying
+     on the platform default (lesson 18).</p>
+
+  <h2>Regular expressions, briefly</h2>
+  <pre><code>"hello123".matches("[a-z]+\\d+")            // true
+"a1b2".replaceAll("\\d", "#")               // "a#b#"
+"a, b,c".split("\\s*,\\s*")                 // ["a", "b", "c"]
+
+Pattern p = Pattern.compile("(\\w+)@(\\w+)\\.com");   // compile once, reuse
+Matcher m = p.matcher("write to ada@example.com now");
+if (m.find()) {
+    m.group(1);   // "ada"
+    m.group(2);   // "example"
+}</code></pre>
+  <p>Remember that in a Java string, a backslash must itself be escaped: the regex <code>\d</code> is written
+     <code>"\\d"</code>.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Write <code>isPalindrome(String s)</code> that ignores case, spaces and punctuation.</li>
+      <li>Count the words in a sentence, then print each word with its length, right-aligned in a column using
+          <code>printf</code>.</li>
+      <li>Write <code>capitalise(String name)</code> turning <code>"ada lovelace"</code> into
+          <code>"Ada Lovelace"</code>.</li>
+      <li>Build a CSV line from a <code>List&lt;String&gt;</code> two ways: with <code>StringBuilder</code> and with
+          <code>String.join</code>.</li>
+      <li>Validate an email-ish string with a regex, and explain one case where your regex is wrong (there is always
+          one).</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Classes and objects — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="09-oop-basics.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Classes and objects</h1>
+  <p class="lead">The core of Java: bundling data with the behaviour that operates on it, and controlling who can touch
+     what.</p>
+
+  <h2>Class versus object</h2>
+  <p>A <strong>class</strong> is the blueprint; an <strong>object</strong> (instance) is a thing built from it. One
+     <code>BankAccount</code> class, thousands of accounts.</p>
+  <pre><code>public class BankAccount {
+    private String owner;        // fields = the state each object carries
+    private double balance;
+
+    public BankAccount(String owner) {   // constructor
+        this.owner = owner;
+        this.balance = 0;
+    }
+
+    public void deposit(double amount) { // behaviour
+        if (amount &lt;= 0) throw new IllegalArgumentException("Deposit must be positive");
+        balance += amount;
+    }
+
+    public double getBalance() {
+        return balance;
+    }
+}</code></pre>
+  <pre><code>BankAccount acc = new BankAccount("Ada");
+acc.deposit(100);
+System.out.println(acc.getBalance());   // 100.0</code></pre>
+  <p><code>new</code> allocates the object on the heap, runs the constructor, and returns a reference to it.</p>
+
+  <h2>Fields</h2>
+  <pre><code>public class Product {
+    private String name;              // instance field: one per object
+    private double price;
+    private boolean available = true; // fields DO get a default (unlike locals)
+
+    public static int totalProducts;  // static field: one for the whole class
+    public static final double VAT = 0.19;  // constant
+}</code></pre>
+  <p>Instance fields describe an individual object. Static fields describe the class itself — counters, caches,
+     constants. Mutable static state is a frequent source of bugs; keep it to constants.</p>
+
+  <h2>Constructors</h2>
+  <pre><code>public class Product {
+    private final String name;
+    private final double price;
+    private int stock;
+
+    public Product(String name, double price) {   // main constructor
+        if (name == null || name.isBlank()) throw new IllegalArgumentException("name required");
+        if (price &lt; 0) throw new IllegalArgumentException("price must be &gt;= 0");
+        this.name = name;
+        this.price = price;
+        this.stock = 0;
+    }
+
+    public Product(String name) {     // overloaded, delegates with this(...)
+        this(name, 0);
+    }
+}</code></pre>
+  <ul>
+    <li>Same name as the class, no return type.</li>
+    <li>If you write no constructor, Java gives you a no-argument one. Write one yourself and that gift disappears.</li>
+    <li><code>this(...)</code> calls another constructor and must be the first statement.</li>
+    <li>Validate in the constructor so an object can never exist in an invalid state.</li>
+  </ul>
+
+  <h2>Encapsulation and access modifiers</h2>
+  <table>
+    <tr><th>Modifier</th><th>Visible from</th><th>Use for</th></tr>
+    <tr><td><code>private</code></td><td>the same class only</td><td>fields and internal helpers — your default</td></tr>
+    <tr><td>(none) "package-private"</td><td>the same package</td><td>things shared inside a module</td></tr>
+    <tr><td><code>protected</code></td><td>package + subclasses</td><td>hooks meant for subclasses</td></tr>
+    <tr><td><code>public</code></td><td>everywhere</td><td>the deliberate API of your class</td></tr>
+  </table>
+  <p>Rule of thumb: fields <code>private</code>, methods as private as they can be. Making a field public means every
+     caller can put your object into an invalid state and you can never change its representation.</p>
+
+  <h3>Getters and setters</h3>
+  <pre><code>public String getName()  { return name; }
+public boolean isActive() { return active; }   // booleans use "is"
+
+public void setStock(int stock) {
+    if (stock &lt; 0) throw new IllegalArgumentException("stock cannot be negative");
+    this.stock = stock;
+}</code></pre>
+  <p>Do not add a getter and setter for every field reflexively — that is just a public field with extra typing. Add
+     accessors the class's users genuinely need, and prefer meaningful operations
+     (<code>account.withdraw(50)</code>) over <code>setBalance</code>.</p>
+
+  <h3>Defensive copies</h3>
+  <pre><code>public class Team {
+    private final List&lt;String&gt; members;
+
+    public Team(List&lt;String&gt; members) {
+        this.members = new ArrayList&lt;&gt;(members);   // copy in
+    }
+
+    public List&lt;String&gt; getMembers() {
+        return List.copyOf(members);               // unmodifiable copy out
+    }
+}</code></pre>
+  <p>Without the copies, a caller holding the same list can mutate your object behind your back.</p>
+
+  <h2>this</h2>
+  <pre><code>public class Point {
+    private int x, y;
+
+    public Point(int x, int y) {
+        this.x = x;          // disambiguates field from parameter
+        this.y = y;
+    }
+
+    public Point moveBy(int dx, int dy) {
+        return new Point(this.x + dx, this.y + dy);
+    }
+
+    public boolean isSameAs(Point other) {
+        return this == other;    // reference identity
+    }
+}</code></pre>
+
+  <h2>Object lifecycle and garbage collection</h2>
+  <pre><code>Product p = new Product("Book", 10);   // allocated on the heap
+p = null;                              // nothing references it any more
+// the garbage collector will free it eventually — you never do it yourself</code></pre>
+  <p>There is no <code>delete</code>. Objects live as long as something reachable refers to them. "Memory leaks" in Java
+     mean you accidentally kept a reference (typically in a static collection or a cache).</p>
+
+  <h2>toString, equals and hashCode</h2>
+  <pre><code>public class Product {
+    private final String sku;
+    private final String name;
+
+    @Override
+    public String toString() {          // what println and logs show
+        return "Product{sku='" + sku + "', name='" + name + "'}";
+    }
+
+    @Override
+    public boolean equals(Object o) {   // value equality
+        if (this == o) return true;
+        if (!(o instanceof Product other)) return false;
+        return sku.equals(other.sku);
+    }
+
+    @Override
+    public int hashCode() {             // MUST agree with equals
+        return Objects.hash(sku);
+    }
+}</code></pre>
+  <div class="warn">
+    <strong>The contract</strong>
+    Equal objects must have equal hash codes. Override one and you override the other, or your objects will misbehave
+    in <code>HashMap</code> and <code>HashSet</code> (lesson 14). Let the IDE generate both, or use a
+    <code>record</code> (lesson 12), which writes all three for you.
+  </div>
+
+  <h2>Static methods, blocks and nested classes</h2>
+  <pre><code>public class MathUtils {
+    private MathUtils() {}                  // utility class: prevent instantiation
+
+    public static int square(int n) { return n * n; }
+}
+
+public class Config {
+    private static final Map&lt;String, String&gt; DEFAULTS = new HashMap&lt;&gt;();
+    static {                                // static initialiser: runs once, on class load
+        DEFAULTS.put("timeout", "30");
+    }
+}
+
+public class Order {
+    private static class LineItem { ... }   // nested: only Order needs it
+}</code></pre>
+
+  <h2>A worked example</h2>
+  <pre><code>public class Library {
+    private final String name;
+    private final List&lt;Book&gt; books = new ArrayList&lt;&gt;();
+
+    public Library(String name) { this.name = name; }
+
+    public void add(Book book) {
+        Objects.requireNonNull(book, "book");
+        books.add(book);
+    }
+
+    public Optional&lt;Book&gt; findByIsbn(String isbn) {
+        for (Book b : books) {
+            if (b.getIsbn().equals(isbn)) return Optional.of(b);
+        }
+        return Optional.empty();
+    }
+
+    public int size() { return books.size(); }
+}</code></pre>
+  <p>Notice what the class exposes: operations, not its internal list. That is encapsulation doing its job — the
+     <code>ArrayList</code> could become a <code>Map</code> tomorrow without breaking a single caller.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Model a <code>BankAccount</code> with deposit, withdraw (rejecting overdrafts) and a transaction history the
+          caller cannot modify from outside.</li>
+      <li>Write a <code>Rectangle</code> class with <code>area()</code>, <code>perimeter()</code>,
+          <code>isSquare()</code> and a proper <code>toString()</code>.</li>
+      <li>Add a static counter to a class that reports how many instances have been created.</li>
+      <li>Implement <code>equals</code> and <code>hashCode</code> on a <code>Person</code> keyed by national id, then
+          put two "equal" people into a <code>HashSet</code> and confirm only one survives.</li>
+      <li>Take any class you wrote earlier and make every field <code>private final</code>, moving validation into the
+          constructor.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evaluation and testing — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="16-evaluation.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Evaluation and testing</h1>
+  <p class="lead">How you know whether a change made things better. This is the skill that separates people who ship AI
+     features from people who demo them — and the one most courses skip.</p>
+
+  <h2>Why the usual testing does not work</h2>
+  <pre><code>assert answer == "The leave policy allows 25 days per year."   # fails on any rewording</code></pre>
+  <p>Outputs vary, several answers can be correct, and quality is a spectrum rather than a boolean. So you move from
+     "does this pass" to "what fraction of a representative set is acceptable, and is that fraction going up".</p>
+  <div class="warn">
+    <strong>Without an eval set you are not engineering</strong>
+    Changing a prompt, checking one example and shipping is how systems silently regress. The change that fixed your
+    example may have broken twenty others; you will find out from users. An eval set is the difference between
+    improving a system and stirring it.
+  </div>
+
+  <h2>Build the dataset first</h2>
+  <p>Start at 30–50 cases. That is enough to see real movement and small enough to build in an afternoon.</p>
+  <pre><code># evals/dataset.jsonl — one case per line, version controlled
+{"id": "leave-01", "question": "How many leave days do I get?",
+ "expected": "25 days per year, pro-rated in the first year",
+ "must_include": ["25"], "must_cite": ["handbook-2026:leave"], "tags": ["hr", "easy"]}
+{"id": "leave-02", "question": "Can I carry unused leave into next year?",
+ "expected": "Up to 5 days may be carried over until 31 March",
+ "must_include": ["5", "31 March"], "tags": ["hr", "medium"]}
+{"id": "oos-01", "question": "What is the capital of Peru?",
+ "expected_behaviour": "refuse — not in the documents", "tags": ["out-of-scope"]}</code></pre>
+  <p>Where the cases come from, in order of value:</p>
+  <ol>
+    <li><strong>Real user questions</strong> from logs — the only truly representative source.</li>
+    <li><strong>Every bug you have fixed</strong> — a regression suite you get for free.</li>
+    <li><strong>Edge cases you know are hard</strong> — ambiguity, missing data, multiple documents, adversarial
+        input.</li>
+    <li><strong>Out-of-scope questions</strong> where the correct answer is a refusal. Systems that never refuse are
+        systems that hallucinate.</li>
+    <li><strong>Synthetic cases</strong> generated from your documents — useful for volume, weakest for realism.</li>
+  </ol>
+  <p>Split the set: iterate on a training portion, and hold out a test portion you only look at occasionally. Otherwise
+     you will tune until you fit your own 50 examples and learn nothing about the fifty-first.</p>
+
+  <h2>Grading: pick the cheapest method that works</h2>
+  <table>
+    <tr><th>Method</th><th>Use for</th><th>Notes</th></tr>
+    <tr><td><strong>Exact / enum match</strong></td><td>Classification, routing, extraction fields</td><td>Free,
+        deterministic, unambiguous. Use it wherever the task allows.</td></tr>
+    <tr><td><strong>Programmatic checks</strong></td><td>"Contains 25", "cites source X", valid JSON, under 200
+        words</td><td>Cheap and reliable; covers more than people expect.</td></tr>
+    <tr><td><strong>Retrieval metrics</strong></td><td>RAG pipelines</td><td>recall@k, MRR (lesson 12). Measure
+        retrieval separately from generation — always.</td></tr>
+    <tr><td><strong>LLM as judge</strong></td><td>Open-ended quality, faithfulness, tone</td><td>Powerful, imperfect;
+        must itself be validated against human labels.</td></tr>
+    <tr><td><strong>Human review</strong></td><td>The ground truth</td><td>Expensive. Use it to calibrate the judge, and
+        for the final call before a launch.</td></tr>
+  </table>
+
+  <h3>An LLM judge with a usable output</h3>
+  <pre><code>from pydantic import BaseModel, Field
+from typing import Literal
+
+class Judgement(BaseModel):
+    reasoning: str = Field(description="Brief comparison, written before the verdict")
+    verdict: Literal["correct", "partially_correct", "incorrect", "refused"]
+    faithful: bool = Field(description="Every claim is supported by the provided sources")
+    score: int = Field(ge=1, le=5)
+
+JUDGE = """You grade answers from a document question-answering system.
+
+Compare the answer with the reference answer and the sources.
+- correct: the same facts, wording may differ
+- partially_correct: right but incomplete, or contains one minor error
+- incorrect: wrong, or contradicts the reference
+- refused: the system said it could not find the answer
+
+faithful = every factual claim in the answer appears in the sources.
+An answer can be faithful and still incorrect (correct quoting of the wrong source).
+Be strict. An answer that adds unsupported detail is not faithful."""
+
+def judge(case, answer: str, sources: list[str]) -> Judgement:
+    return client.messages.parse(
+        model="claude-opus-5",              # judge with a strong model
+        max_tokens=2000,
+        system=JUDGE,
+        messages=[{"role": "user", "content":
+            f"&lt;question&gt;{case['question']}&lt;/question&gt;\n"
+            f"&lt;reference&gt;{case['expected']}&lt;/reference&gt;\n"
+            f"&lt;sources&gt;{chr(10).join(sources)}&lt;/sources&gt;\n"
+            f"&lt;answer&gt;{answer}&lt;/answer&gt;"}],
+        output_format=Judgement,
+    ).parsed_output</code></pre>
+  <p>Judge design rules: reasoning field before the verdict; a small discrete scale rather than "score out of 100";
+     explicit criteria for each label; and one dimension per judgement — correctness and tone should not share a
+     score.</p>
+  <div class="note">
+    <strong>Validate the judge before you trust it</strong>
+    Grade 30 cases by hand, run the judge on the same 30, and measure agreement. Below ~80% agreement, fix the judge
+    prompt before using it to make decisions. Also watch for known biases: judges favour longer answers, and favour
+    answers written in a style similar to their own.
+  </div>
+
+  <h2>The runner</h2>
+  <pre><code>import json, time, statistics
+from pathlib import Path
+
+def run_eval(name: str, pipeline, dataset_path="evals/dataset.jsonl") -> dict:
+    cases = [json.loads(line) for line in Path(dataset_path).read_text(encoding="utf-8").splitlines()]
+    results, started = [], time.time()
+
+    for case in cases:
+        t0 = time.perf_counter()
+        out = pipeline(case["question"])
+        latency_ms = (time.perf_counter() - t0) * 1000
+
+        checks = {
+            "includes": all(s.lower() in out["answer"].lower() for s in case.get("must_include", [])),
+            "cited": bool(out["sources"]) or not case.get("must_cite"),
+        }
+        verdict = judge(case, out["answer"], [s["title"] for s in out["sources"]])
+
+        results.append({
+            "id": case["id"], "tags": case.get("tags", []),
+            "answer": out["answer"], "verdict": verdict.verdict,
+            "faithful": verdict.faithful, "score": verdict.score,
+            "checks": checks, "latency_ms": latency_ms,
+            "cost_usd": estimate_cost(out["usage"]),
+        })
+
+    summary = {
+        "run": name,
+        "n": len(results),
+        "accuracy": sum(r["verdict"] == "correct" for r in results) / len(results),
+        "faithfulness": sum(r["faithful"] for r in results) / len(results),
+        "checks_passed": sum(all(r["checks"].values()) for r in results) / len(results),
+        "p50_ms": statistics.median(r["latency_ms"] for r in results),
+        "p95_ms": sorted(r["latency_ms"] for r in results)[int(0.95 * len(results)) - 1],
+        "cost_usd": sum(r["cost_usd"] for r in results),
+        "seconds": time.time() - started,
+    }
+
+    Path(f"evals/runs/{name}.json").write_text(json.dumps({"summary": summary, "results": results}, indent=2))
+    return summary</code></pre>
+  <pre><code>$ python -m evals.run baseline
+{'run': 'baseline', 'n': 50, 'accuracy': 0.72, 'faithfulness': 0.88,
+ 'p50_ms': 2140, 'p95_ms': 4900, 'cost_usd': 0.41}
+
+$ python -m evals.run hybrid-search
+{'run': 'hybrid-search', 'n': 50, 'accuracy': 0.86, 'faithfulness': 0.94,
+ 'p50_ms': 2380, 'p95_ms': 5200, 'cost_usd': 0.44}</code></pre>
+  <p>That comparison — one change, quality up, latency slightly up, cost roughly flat — is what an engineering decision
+     looks like in this field. Keep every run; the history is the story of the system.</p>
+
+  <h2>Metrics worth tracking</h2>
+  <table>
+    <tr><td><strong>Accuracy / task success</strong></td><td>The headline. Define it per product.</td></tr>
+    <tr><td><strong>Faithfulness</strong></td><td>Claims supported by sources. The anti-hallucination metric.</td></tr>
+    <tr><td><strong>Recall@k</strong></td><td>Retrieval health, measured separately.</td></tr>
+    <tr><td><strong>Refusal correctness</strong></td><td>Refuses when it should, does not when it should not.</td></tr>
+    <tr><td><strong>Format validity</strong></td><td>Parses, matches schema, respects limits.</td></tr>
+    <tr><td><strong>Latency p50 / p95</strong></td><td>Averages hide the bad tail users actually complain about.</td></tr>
+    <tr><td><strong>Cost per task</strong></td><td>Not per call — per completed task.</td></tr>
+  </table>
+  <p>Segment by tag. "86% overall" can hide "45% on the multi-document questions", which is exactly what you needed to
+     know.</p>
+
+  <h2>Hill-climbing without fooling yourself</h2>
+  <ol>
+    <li>Run the baseline. Record everything.</li>
+    <li>Read the failures — all of them, properly. Group by cause.</li>
+    <li>Change <strong>one</strong> thing that addresses the largest group.</li>
+    <li>Re-run. Compare. Keep the change only if it improved the metric that matters without wrecking another.</li>
+    <li>Every few rounds, check the held-out set. If train improves and test does not, you are overfitting.</li>
+    <li>Stop when improvements are within noise — and record where you stopped and why.</li>
+  </ol>
+  <p>Noise is real: with 50 cases, a 2-point move is nothing. Either grow the dataset or run the eval a few times and
+     look at the variance before you believe a small delta.</p>
+
+  <h2>Evals in CI</h2>
+  <pre><code># .github/workflows/eval.yml
+- run: python -m evals.run "pr-${{ github.event.number }}"
+- run: python -m evals.compare --baseline main --against "pr-${{ github.event.number }}" --min-accuracy 0.80</code></pre>
+  <p>Practical shape: a small, fast, deterministic subset on every pull request (schema validity, classification
+     accuracy, refusals — cheap graders only), and the full LLM-judged suite nightly or before a release. Fail the build
+     on a regression below your threshold. Budget the cost: 50 cases with a judge is a few dollars, which is fine
+     nightly and not fine on every push.</p>
+
+  <h2>Unit tests still matter</h2>
+  <pre><code>def test_chunking_preserves_content():
+    chunks = chunk_recursive(TEXT, size=500, overlap=50)
+    assert "".join(c.replace(OVERLAP_MARKER, "") for c in chunks)  # nothing lost
+
+def test_citation_extraction():
+    assert extract_citation_ids("As stated [1][3], the policy...") == {1, 3}
+
+def test_tenant_filter(client):
+    results = search("anything", tenant="acme")
+    assert all(r.metadata["tenant"] == "acme" for r in results)</code></pre>
+  <p>Everything deterministic around the model — chunking, parsing, filters, citation handling, cost calculation — gets
+     ordinary fast unit tests. Save the expensive evals for the non-deterministic part.</p>
+
+  <h2>Evaluating in production</h2>
+  <ul>
+    <li><strong>Collect feedback</strong> (thumbs, corrections, "was this helpful") and store it with the trace.</li>
+    <li><strong>Watch implicit signals</strong>: repeated rephrasing of the same question, abandonment, escalation to a
+        human.</li>
+    <li><strong>Sample and review</strong> a handful of real conversations weekly. Nothing replaces reading them.</li>
+    <li><strong>Feed failures back</strong> into the eval set. This is the flywheel: production failures become
+        regression cases become a better system.</li>
+    <li><strong>A/B test</strong> significant changes rather than reasoning about them.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Build a 30-case eval set for your RAG project, including five out-of-scope questions.</li>
+      <li>Write the runner with programmatic checks only, and record a baseline.</li>
+      <li>Add an LLM judge, then hand-grade 20 cases and measure agreement with it. Fix the judge until it agrees.</li>
+      <li>Make one improvement from lesson 12 and prove the delta with numbers.</li>
+      <li>Segment results by tag and find the category where your system is worst.</li>
+      <li>Add a fast subset to CI that fails the build on a regression.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control flow — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="05-control-flow.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Control flow</h1>
+  <p class="lead">Branching and looping — plus the modern switch, which is much nicer than the one you may have seen in
+     older code.</p>
+
+  <h2>if / else if / else</h2>
+  <pre><code>int score = 73;
+
+if (score &gt;= 90) {
+    System.out.println("A");
+} else if (score &gt;= 80) {
+    System.out.println("B");
+} else if (score &gt;= 70) {
+    System.out.println("C");
+} else {
+    System.out.println("F");
+}</code></pre>
+  <p>The condition must be a <code>boolean</code> — unlike C or JavaScript, <code>if (1)</code> or
+     <code>if (someString)</code> does not compile. That removes a whole family of bugs.</p>
+  <p>Always use braces, even for one-line bodies. The alternative has caused real security incidents.</p>
+
+  <h3>Guard clauses beat nesting</h3>
+  <pre><code>// hard to read
+public void process(Order order) {
+    if (order != null) {
+        if (order.isPaid()) {
+            if (!order.isShipped()) {
+                ship(order);
+            }
+        }
+    }
+}
+
+// flat and obvious
+public void process(Order order) {
+    if (order == null)     return;
+    if (!order.isPaid())   return;
+    if (order.isShipped()) return;
+    ship(order);
+}</code></pre>
+
+  <h2>switch</h2>
+  <h3>The classic form</h3>
+  <pre><code>switch (day) {
+    case 1:
+    case 2:
+    case 3:
+    case 4:
+    case 5:
+        System.out.println("Weekday");
+        break;          // forget this and execution "falls through" to the next case
+    case 6:
+    case 7:
+        System.out.println("Weekend");
+        break;
+    default:
+        System.out.println("Invalid day");
+}</code></pre>
+
+  <h3>The arrow form (Java 14+) — prefer this</h3>
+  <pre><code>switch (day) {
+    case 1, 2, 3, 4, 5 -&gt; System.out.println("Weekday");
+    case 6, 7          -&gt; System.out.println("Weekend");
+    default            -&gt; System.out.println("Invalid day");
+}</code></pre>
+  <p>No <code>break</code>, no fall-through, multiple labels per branch.</p>
+
+  <h3>switch as an expression</h3>
+  <pre><code>String type = switch (day) {
+    case 1, 2, 3, 4, 5 -&gt; "Weekday";
+    case 6, 7          -&gt; "Weekend";
+    default            -&gt; throw new IllegalArgumentException("Bad day: " + day);
+};
+
+int daysInMonth = switch (month) {
+    case FEBRUARY -&gt; isLeap ? 29 : 28;
+    case APRIL, JUNE, SEPTEMBER, NOVEMBER -&gt; 30;
+    default -&gt; {
+        int d = 31;             // a block branch needs yield
+        yield d;
+    }
+};</code></pre>
+  <p>A switch expression must produce a value on every path — the compiler enforces exhaustiveness, which is why
+     switching over an <code>enum</code> with all constants covered needs no <code>default</code>.</p>
+  <p>Switch works on <code>int</code>, <code>String</code>, <code>enum</code>, and (Java 21+) on types via pattern
+     matching:</p>
+  <pre><code>String describe(Object o) {
+    return switch (o) {
+        case Integer i when i &gt; 100 -&gt; "big number " + i;
+        case Integer i             -&gt; "number " + i;
+        case String s              -&gt; "text of length " + s.length();
+        case null                  -&gt; "nothing";
+        default                    -&gt; "something else";
+    };
+}</code></pre>
+
+  <h2>Loops</h2>
+  <h3>for</h3>
+  <pre><code>for (int i = 0; i &lt; 5; i++) {
+    System.out.println(i);          // 0 1 2 3 4
+}
+
+for (int i = 10; i &gt; 0; i -= 2) { ... }   // counting down
+for (int i = 0, j = 10; i &lt; j; i++, j--) { ... }</code></pre>
+  <p>Read the header as: initialise once, test before each pass, update after each pass.</p>
+
+  <h3>Enhanced for (for-each)</h3>
+  <pre><code>int[] numbers = {3, 1, 4, 1, 5};
+for (int n : numbers) {
+    System.out.println(n);
+}
+
+List&lt;String&gt; names = List.of("Ada", "Linus", "Grace");
+for (String name : names) {
+    System.out.println(name);
+}</code></pre>
+  <p>Use this whenever you do not need the index. It cannot modify the collection or the loop variable's slot — for
+     that, use an indexed <code>for</code> or an <code>Iterator</code>.</p>
+
+  <h3>while and do-while</h3>
+  <pre><code>int attempts = 0;
+while (attempts &lt; 3 &amp;&amp; !connected) {
+    connect();
+    attempts++;
+}
+
+do {
+    input = readLine();          // body runs at least once
+} while (!input.equals("quit"));</code></pre>
+  <p>Use <code>while</code> when the number of iterations is not known up front, <code>for</code> when it is.</p>
+
+  <h2>break, continue and labels</h2>
+  <pre><code>for (String name : names) {
+    if (name.isBlank()) continue;   // skip to the next iteration
+    if (name.equals("stop")) break; // leave the loop entirely
+    process(name);
+}
+
+outer:
+for (int i = 0; i &lt; rows; i++) {
+    for (int j = 0; j &lt; cols; j++) {
+        if (grid[i][j] == target) {
+            found = true;
+            break outer;            // breaks BOTH loops
+        }
+    }
+}</code></pre>
+  <p>Labelled breaks are legal but rare; usually extracting the search into its own method that <code>return</code>s is
+     clearer.</p>
+
+  <h2>Infinite loops and off-by-one</h2>
+  <pre><code>for (int i = 0; i &lt;= list.size(); i++)   // IndexOutOfBounds: last valid index is size() - 1
+for (int i = 0; i &lt; 10; i--)             // never ends
+while (true) { ... }                     // deliberate; make sure something breaks or returns</code></pre>
+  <p>Two questions catch most loop bugs: does the loop variable change on every path, and is the boundary
+     <code>&lt;</code> or <code>&lt;=</code>?</p>
+
+  <h2>Reading input</h2>
+  <pre><code>import java.util.Scanner;
+
+Scanner scanner = new Scanner(System.in);
+System.out.print("Your name: ");
+String name = scanner.nextLine();
+System.out.print("Your age: ");
+int age = scanner.nextInt();
+System.out.println("Hello " + name + ", " + age);</code></pre>
+  <div class="note">
+    <strong>Scanner gotcha</strong>
+    <code>nextInt()</code> consumes the number but not the newline after it, so a following <code>nextLine()</code>
+    returns an empty string. Read everything with <code>nextLine()</code> and parse it yourself to avoid the whole
+    class of problems.
+  </div>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>FizzBuzz: print 1–100, but multiples of 3 as "Fizz", of 5 as "Buzz", of both as "FizzBuzz".</li>
+      <li>Rewrite a grade-letter <code>if/else</code> chain as a switch expression that returns a
+          <code>String</code>.</li>
+      <li>Number-guessing game: pick a random number 1–100 with <code>new Random().nextInt(100) + 1</code>, loop
+          reading guesses, print higher/lower, stop when correct and report the number of attempts.</li>
+      <li>Print a right-angled triangle of stars of height <code>n</code> using nested loops.</li>
+      <li>Sum only the positive numbers in an array, skipping negatives with <code>continue</code>, and stop entirely
+          if you hit a zero.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Java Spring — Learning</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Java Spring</h1>
+  <p class="lead">Spring Boot from first principles to a deployed REST API — the framework work a junior backend
+     developer is actually hired to do.</p>
+
+  <h2>Before you start</h2>
+  <p>This course assumes the <a href="../java/index.html">Java course</a>: classes and interfaces, generics, collections,
+     lambdas, exceptions, JUnit and Maven. Spring is not a different language, but it leans hard on annotations,
+     interfaces and generics, so shaky Java makes Spring feel like magic. It is not magic.</p>
+
+  <div class="note">
+    <strong>Versions</strong>
+    Spring Boot 3.x on Java 21. Spring Boot 3 moved from <code>javax.*</code> to <code>jakarta.*</code> imports — if a
+    tutorial you find online uses <code>javax.persistence</code>, it is written for Boot 2 and the imports will not
+    compile.
+  </div>
+
+  <h2>The shape of the course</h2>
+  <p>Lessons 1–4 are the container: what Spring does for you and how you configure it. Lessons 5–7 are the web layer.
+     Lessons 8–10 are the database. Lessons 11–15 are the things that turn a demo into a service someone can run in
+     production. Lesson 16 is a capstone that puts all of it together.</p>
+
+  <h2>Lessons</h2>
+  <div class="cards" id="lesson-cards"></div>
+
+  <h2>The mental model to hold on to</h2>
+  <p>A Spring Boot application is a box (the <em>application context</em>) full of objects (<em>beans</em>) that Spring
+     creates for you and wires together. Nearly every annotation you will meet does one of three things:</p>
+  <ol>
+    <li><strong>Puts an object in the box</strong> — <code>@Component</code>, <code>@Service</code>,
+        <code>@Repository</code>, <code>@Configuration</code> + <code>@Bean</code>.</li>
+    <li><strong>Takes an object out of the box</strong> — constructor injection, <code>@Autowired</code>.</li>
+    <li><strong>Asks Spring to wrap an object in behaviour</strong> — <code>@Transactional</code>,
+        <code>@Cacheable</code>, <code>@PreAuthorize</code>, <code>@Scheduled</code>.</li>
+  </ol>
+  <p>Whenever something surprises you, ask which of those three is happening.</p>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

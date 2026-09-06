@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Testing with JUnit 5 — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="20-testing.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Testing with JUnit 5</h1>
+  <p class="lead">Writing tests is not an advanced topic — it is part of writing the code. Teams expect a junior to
+     deliver features with tests, not features plus a promise.</p>
+
+  <h2>Setup</h2>
+  <pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;org.junit.jupiter&lt;/groupId&gt;
+    &lt;artifactId&gt;junit-jupiter&lt;/artifactId&gt;
+    &lt;version&gt;5.10.2&lt;/version&gt;
+    &lt;scope&gt;test&lt;/scope&gt;
+&lt;/dependency&gt;</code></pre>
+  <p>Tests live in <code>src/test/java</code>, mirroring the package of the class under test.
+     <code>mvn test</code> runs them; so does the green arrow in your IDE.</p>
+
+  <h2>A first test</h2>
+  <pre><code>package com.example;
+
+import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+class CalculatorTest {
+
+    @Test
+    void addsTwoPositiveNumbers() {
+        Calculator calc = new Calculator();      // arrange
+
+        int result = calc.add(2, 3);             // act
+
+        assertEquals(5, result);                 // assert
+    }
+}</code></pre>
+  <p><strong>Arrange, act, assert</strong> — keep the three phases visible and each test focused on one behaviour.
+     Test classes and methods are package-private by convention; no <code>public</code> needed in JUnit 5.</p>
+
+  <h2>Naming</h2>
+  <pre><code>@Test void withdrawFailsWhenBalanceIsInsufficient() { ... }
+@Test void returnsEmptyOptionalWhenUserDoesNotExist() { ... }
+
+@Test
+@DisplayName("withdrawing more than the balance throws InsufficientFundsException")
+void withdrawTooMuch() { ... }</code></pre>
+  <p>The name should say what behaviour is expected. When a build fails at 2am, the test name is the error message.</p>
+
+  <h2>Assertions</h2>
+  <pre><code>assertEquals(expected, actual);
+assertEquals(expected, actual, "orders should match");   // message shown on failure
+assertNotEquals(a, b);
+assertTrue(condition);   assertFalse(condition);
+assertNull(x);           assertNotNull(x);
+assertSame(a, b);                       // same object reference
+assertArrayEquals(expected, actual);
+assertIterableEquals(list1, list2);
+
+// exceptions
+InsufficientFundsException ex = assertThrows(
+        InsufficientFundsException.class,
+        () -&gt; account.withdraw(1000));
+assertEquals("short by 500", ex.getMessage());
+
+assertDoesNotThrow(() -&gt; service.run());
+
+// group: all run, all failures reported together
+assertAll("order",
+    () -&gt; assertEquals("A-1", order.id()),
+    () -&gt; assertEquals(2, order.items().size()),
+    () -&gt; assertTrue(order.total().compareTo(BigDecimal.ZERO) &gt; 0));
+
+// timeouts
+assertTimeout(Duration.ofMillis(500), () -&gt; service.fast());</code></pre>
+  <p>Note the argument order: <strong>expected first, actual second</strong>. Reversing it produces confusing failure
+     messages.</p>
+
+  <h3>AssertJ (worth adopting)</h3>
+  <pre><code>import static org.assertj.core.api.Assertions.assertThat;
+
+assertThat(result).isEqualTo(5);
+assertThat(names).hasSize(3).contains("Ada").doesNotContain("Bob");
+assertThat(order.total()).isEqualByComparingTo("29.99");
+assertThat(user).extracting(User::email).isEqualTo("a@b.com");
+assertThatThrownBy(() -&gt; account.withdraw(1000))
+        .isInstanceOf(InsufficientFundsException.class)
+        .hasMessageContaining("short by");</code></pre>
+  <p>Fluent, readable, and its failure messages are far more informative. Spring Boot's test starter includes it.</p>
+
+  <h2>Lifecycle</h2>
+  <pre><code>class OrderServiceTest {
+
+    private OrderService service;
+
+    @BeforeEach void setUp()      { service = new OrderService(new InMemoryRepo()); }
+    @AfterEach  void tearDown()   { /* clean up */ }
+
+    @BeforeAll static void once() { /* expensive, shared setup */ }
+    @AfterAll  static void done() { }
+}</code></pre>
+  <p>A fresh test instance is created for every test method, so tests cannot leak state into each other — provided you
+     do not use static mutable fields.</p>
+
+  <h2>Parameterised tests</h2>
+  <pre><code>@ParameterizedTest
+@ValueSource(strings = {"", "  ", "\t"})
+void blankInputIsRejected(String input) {
+    assertThrows(IllegalArgumentException.class, () -&gt; new Product(input, 10));
+}
+
+@ParameterizedTest
+@CsvSource({
+    "2, 3, 5",
+    "0, 0, 0",
+    "-1, 1, 0"
+})
+void addsCorrectly(int a, int b, int expected) {
+    assertEquals(expected, calculator.add(a, b));
+}
+
+@ParameterizedTest
+@EnumSource(Status.class)
+void everyStatusHasALabel(Status status) {
+    assertNotNull(status.label());
+}</code></pre>
+
+  <h2>Other useful annotations</h2>
+  <pre><code>@Disabled("flaky — see TICKET-123")     // never leave one without a reason
+@Nested class WhenAccountIsClosed { }   // group related tests, with their own @BeforeEach
+@Tag("slow")                            // filter which tests run
+@RepeatedTest(100)                      // hunting an intermittent failure</code></pre>
+
+  <h2>Test doubles and Mockito</h2>
+  <pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;org.mockito&lt;/groupId&gt;
+    &lt;artifactId&gt;mockito-junit-jupiter&lt;/artifactId&gt;
+    &lt;version&gt;5.12.0&lt;/version&gt;
+    &lt;scope&gt;test&lt;/scope&gt;
+&lt;/dependency&gt;</code></pre>
+  <pre><code>@ExtendWith(MockitoExtension.class)
+class CheckoutServiceTest {
+
+    @Mock  PaymentGateway gateway;          // a fake collaborator
+    @Mock  OrderRepository repository;
+    @InjectMocks CheckoutService service;   // constructed with the mocks above
+
+    @Test
+    void chargesTheCustomerAndSavesTheOrder() {
+        Order order = new Order("A-1", new BigDecimal("29.99"));
+        when(gateway.charge(any(), any())).thenReturn(PaymentResult.success("tx-1"));
+
+        service.checkout(order);
+
+        verify(gateway).charge("A-1", new BigDecimal("29.99"));
+        verify(repository).save(order);
+        verifyNoMoreInteractions(gateway);
+    }
+
+    @Test
+    void propagatesGatewayFailure() {
+        when(gateway.charge(any(), any())).thenThrow(new GatewayException("down"));
+
+        assertThrows(CheckoutFailedException.class, () -&gt; service.checkout(order));
+    }
+}</code></pre>
+  <p>Mock the things you do not control or that are slow (gateways, repositories, clocks). Do not mock the class you
+     are testing, and do not mock value objects — just create them.</p>
+
+  <h2>What to test</h2>
+  <ul>
+    <li><strong>Business rules</strong> — discounts, validation, state transitions. This is where bugs cost money.</li>
+    <li><strong>Edge cases</strong> — empty, null, zero, negative, maximum, duplicate, out of order.</li>
+    <li><strong>Bugs you fix</strong> — write the failing test first, then fix it. It never comes back silently.</li>
+  </ul>
+  <p>Do not test getters, framework behaviour, or implementation details that will change with every refactor. Aim for
+     tests that survive refactoring: assert on behaviour, not on how it was achieved.</p>
+
+  <div class="note">
+    <strong>The test pyramid</strong>
+    Many fast unit tests, fewer integration tests that involve the database or HTTP layer, very few end-to-end tests.
+    Inverting it produces a slow, flaky suite that nobody trusts. Spring's testing tools for the middle layer are in
+    the Spring course.
+  </div>
+
+  <h2>Test-driven development, in one loop</h2>
+  <pre><code>1. Red    — write a failing test that states what you want
+2. Green  — write the simplest code that passes
+3. Refactor — clean it up with the test protecting you
+   repeat</code></pre>
+  <p>You do not have to work this way all the time. But doing it for a tricky algorithm or a bug fix is genuinely
+     faster than debugging afterwards.</p>
+
+  <h2>Coverage</h2>
+  <p>JaCoCo reports the percentage of code executed by tests. Useful for spotting untested areas; useless as a target —
+     100% coverage with no assertions proves nothing. Look at what is <em>not</em> covered, not at the number.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Write tests for a <code>Calculator</code>: addition, division, and division by zero throwing.</li>
+      <li>Test a <code>BankAccount</code>: deposit, withdrawal, insufficient funds, negative amounts rejected.</li>
+      <li>Convert three similar tests into one <code>@ParameterizedTest</code> with <code>@CsvSource</code>.</li>
+      <li>Write a service that depends on an interface, then test it with a hand-written fake and again with a Mockito
+          mock. Which did you prefer, and why?</li>
+      <li>Find a bug in code you wrote earlier. Write the failing test first, then fix it.</li>
+      <li>Run <code>mvn test</code> from the terminal and read the surefire report in <code>target/</code>.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

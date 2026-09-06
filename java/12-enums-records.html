@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Enums, records and sealed types — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="12-enums-records.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Enums, records and sealed types</h1>
+  <p class="lead">Three ways to say precisely what your data is — and let the compiler enforce it.</p>
+
+  <h2>Enums: a fixed set of values</h2>
+  <pre><code>public enum Status {
+    PENDING, ACTIVE, SUSPENDED, CLOSED
+}
+
+Status s = Status.ACTIVE;
+if (s == Status.ACTIVE) { ... }        // == is correct and safe for enums</code></pre>
+  <p>Compare with the alternative — a <code>String</code> status, where <code>"activ"</code> compiles fine and fails in
+     production. An enum makes invalid values impossible.</p>
+
+  <h3>Built-in members</h3>
+  <pre><code>Status.values()                 // [PENDING, ACTIVE, SUSPENDED, CLOSED]
+Status.valueOf("ACTIVE")        // ACTIVE — throws IllegalArgumentException if unknown
+Status.ACTIVE.name()            // "ACTIVE"
+Status.ACTIVE.ordinal()         // 1 — position; never persist this, order can change
+
+for (Status st : Status.values()) System.out.println(st);</code></pre>
+
+  <h3>Enums with state and behaviour</h3>
+  <pre><code>public enum Planet {
+    MERCURY(3.303e+23, 2.4397e6),
+    EARTH  (5.976e+24, 6.37814e6);
+
+    private final double mass;
+    private final double radius;
+
+    Planet(double mass, double radius) {   // constructor is implicitly private
+        this.mass = mass;
+        this.radius = radius;
+    }
+
+    public double surfaceGravity() {
+        return 6.67300E-11 * mass / (radius * radius);
+    }
+}
+
+Planet.EARTH.surfaceGravity();   // 9.8...</code></pre>
+
+  <h3>Per-constant behaviour</h3>
+  <pre><code>public enum Operation {
+    PLUS("+")  { public int apply(int a, int b) { return a + b; } },
+    MINUS("-") { public int apply(int a, int b) { return a - b; } };
+
+    private final String symbol;
+    Operation(String symbol) { this.symbol = symbol; }
+
+    public abstract int apply(int a, int b);
+    public String symbol() { return symbol; }
+}
+
+Operation.PLUS.apply(2, 3);   // 5</code></pre>
+
+  <h3>Enums in switch</h3>
+  <pre><code>String message = switch (status) {
+    case PENDING   -&gt; "Waiting for approval";
+    case ACTIVE    -&gt; "All good";
+    case SUSPENDED -&gt; "Contact support";
+    case CLOSED    -&gt; "Account closed";
+};    // no default needed: the compiler knows the set is complete</code></pre>
+  <p>That exhaustiveness check is the killer feature: add a constant later and every switch that does not handle it
+     stops compiling, so you cannot forget one.</p>
+
+  <h3>EnumMap and EnumSet</h3>
+  <pre><code>Map&lt;Status, Integer&gt; counts = new EnumMap&lt;&gt;(Status.class);   // array-backed, very fast
+Set&lt;Status&gt; open = EnumSet.of(Status.PENDING, Status.ACTIVE);
+Set&lt;Status&gt; all = EnumSet.allOf(Status.class);</code></pre>
+
+  <h2>Records: transparent, immutable data</h2>
+  <p>Java 16+. A <code>record</code> declares "this type is just these values":</p>
+  <pre><code>public record Point(int x, int y) { }</code></pre>
+  <p>That one line generates: <code>private final</code> fields, a canonical constructor, accessors <code>x()</code> and
+     <code>y()</code>, plus <code>equals</code>, <code>hashCode</code> and <code>toString</code>.</p>
+  <pre><code>Point p = new Point(3, 4);
+p.x();                          // 3   (note: x(), not getX())
+p.toString();                   // Point[x=3, y=4]
+new Point(3, 4).equals(p);      // true — value equality for free</code></pre>
+  <p>The equivalent class is about 40 lines, and every one of them is a chance to get <code>equals</code> wrong.</p>
+
+  <h3>Validation and extra members</h3>
+  <pre><code>public record Money(String currency, BigDecimal amount) {
+
+    public Money {                                  // compact constructor
+        Objects.requireNonNull(currency, "currency");
+        if (amount.signum() &lt; 0) throw new IllegalArgumentException("amount must be &gt;= 0");
+    }
+
+    public Money plus(Money other) {                // extra methods are fine
+        if (!currency.equals(other.currency)) throw new IllegalArgumentException("currency mismatch");
+        return new Money(currency, amount.add(other.amount));
+    }
+
+    public static Money euros(String amount) {      // static factory
+        return new Money("EUR", new BigDecimal(amount));
+    }
+}</code></pre>
+
+  <h3>What records cannot do</h3>
+  <ul>
+    <li>No additional instance fields beyond the components.</li>
+    <li>Always <code>final</code> — no <code>extends</code> (they can implement interfaces).</li>
+    <li>Components are final; "changing" one means constructing a new record.</li>
+  </ul>
+
+  <h3>When to use one</h3>
+  <p>DTOs crossing a boundary, API request and response bodies, value objects (money, coordinates, ranges), keys in
+     maps, and returning more than one value from a method:</p>
+  <pre><code>record SplitResult(List&lt;String&gt; valid, List&lt;String&gt; invalid) { }
+
+SplitResult result = validateAll(input);
+result.valid().forEach(System.out::println);</code></pre>
+  <p>Use a normal class when the object has mutable state or identity (a JPA entity, a service, anything with a
+     lifecycle).</p>
+
+  <h2>Sealed types: a closed hierarchy</h2>
+  <p>Java 17+. Sealing says exactly which types may extend or implement yours:</p>
+  <pre><code>public sealed interface Shape permits Circle, Rectangle, Triangle { }
+
+public record Circle(double radius)               implements Shape { }
+public record Rectangle(double w, double h)       implements Shape { }
+public record Triangle(double base, double height) implements Shape { }</code></pre>
+  <p>Combined with pattern matching, the compiler again checks that you handled every case:</p>
+  <pre><code>double area(Shape shape) {
+    return switch (shape) {
+        case Circle c    -&gt; Math.PI * c.radius() * c.radius();
+        case Rectangle r -&gt; r.w() * r.h();
+        case Triangle t  -&gt; t.base() * t.height() / 2;
+    };                                     // exhaustive: no default required
+}</code></pre>
+  <p>A permitted subclass must itself be <code>final</code>, <code>sealed</code>, or explicitly
+     <code>non-sealed</code>.</p>
+
+  <h3>Record patterns</h3>
+  <pre><code>String describe(Shape shape) {
+    return switch (shape) {
+        case Circle(double r) when r &gt; 10 -&gt; "big circle";
+        case Circle(double r)             -&gt; "circle of radius " + r;
+        case Rectangle(double w, double h) when w == h -&gt; "square";
+        case Rectangle r                  -&gt; "rectangle";
+        case Triangle t                   -&gt; "triangle";
+    };
+}</code></pre>
+  <p>This is how you model "one of these alternatives" — the equivalent of a sum type in other languages — and it is
+     increasingly common in modern Java.</p>
+
+  <h2>Choosing between them</h2>
+  <table>
+    <tr><th>Use</th><th>When</th></tr>
+    <tr><td><code>enum</code></td><td>A value is one of a fixed, known set: statuses, roles, currencies, day of
+        week.</td></tr>
+    <tr><td><code>record</code></td><td>An immutable bundle of values with no identity: DTOs, coordinates, results.</td></tr>
+    <tr><td><code>sealed</code> interface + records</td><td>A value is one of several shapes, each with its own data:
+        events, commands, results that succeed or fail.</td></tr>
+    <tr><td>class</td><td>Mutable state, identity, lifecycle, framework-managed objects.</td></tr>
+  </table>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Write an <code>OrderStatus</code> enum with a <code>canTransitionTo(OrderStatus next)</code> method encoding
+          the legal transitions.</li>
+      <li>Model a currency conversion as an enum with a rate field and a <code>convert(double)</code> method.</li>
+      <li>Turn a <code>Person</code> class with getters, <code>equals</code> and <code>hashCode</code> into a record;
+          count the lines you deleted.</li>
+      <li>Create <code>record Range(int from, int to)</code> that validates <code>from &lt;= to</code> in a compact
+          constructor and exposes <code>contains(int)</code> and <code>length()</code>.</li>
+      <li>Model an API result as <code>sealed interface Result permits Success, Failure</code> and write an exhaustive
+          switch that handles both.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

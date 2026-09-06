@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generics — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="15-generics.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Generics</h1>
+  <p class="lead">Type parameters let one piece of code work with many types while the compiler still checks every use.
+     You have been consuming them since <code>List&lt;String&gt;</code>; now write them.</p>
+
+  <h2>The problem they solve</h2>
+  <pre><code>// before generics (Java 1.4 and earlier)
+List names = new ArrayList();
+names.add("Ada");
+names.add(42);                          // compiles happily
+String s = (String) names.get(1);       // ClassCastException at runtime
+
+// with generics
+List&lt;String&gt; names = new ArrayList&lt;&gt;();
+names.add("Ada");
+names.add(42);                          // compile error — caught immediately
+String s = names.get(0);                // no cast needed</code></pre>
+  <p>Two wins: mistakes move from runtime to compile time, and casts disappear.</p>
+
+  <h2>Generic classes</h2>
+  <pre><code>public class Box&lt;T&gt; {
+    private T content;
+
+    public void put(T content) { this.content = content; }
+    public T get()             { return content; }
+    public boolean isEmpty()   { return content == null; }
+}
+
+Box&lt;String&gt; sb = new Box&lt;&gt;();
+sb.put("hello");
+String value = sb.get();          // typed, no cast
+
+Box&lt;Integer&gt; ib = new Box&lt;&gt;();
+ib.put("hello");                  // compile error</code></pre>
+  <p>The diamond <code>&lt;&gt;</code> on the right-hand side means "infer it from the left". Conventional parameter
+     names: <strong>T</strong> type, <strong>E</strong> element, <strong>K</strong>/<strong>V</strong> key/value,
+     <strong>R</strong> result, <strong>N</strong> number.</p>
+
+  <h3>Several parameters</h3>
+  <pre><code>public class Pair&lt;K, V&gt; {
+    private final K key;
+    private final V value;
+
+    public Pair(K key, V value) { this.key = key; this.value = value; }
+    public K key()   { return key; }
+    public V value() { return value; }
+}
+
+var p = new Pair&lt;String, Integer&gt;("age", 36);
+
+// in modern Java a record is usually better:
+record Pair&lt;K, V&gt;(K key, V value) { }</code></pre>
+
+  <h2>Generic methods</h2>
+  <pre><code>public static &lt;T&gt; List&lt;T&gt; repeat(T item, int times) {   // &lt;T&gt; before the return type
+    List&lt;T&gt; result = new ArrayList&lt;&gt;();
+    for (int i = 0; i &lt; times; i++) result.add(item);
+    return result;
+}
+
+List&lt;String&gt; hellos = repeat("hi", 3);       // T inferred as String
+List&lt;Integer&gt; zeros  = repeat(0, 5);
+
+public static &lt;T&gt; void swap(T[] array, int i, int j) {
+    T tmp = array[i]; array[i] = array[j]; array[j] = tmp;
+}</code></pre>
+
+  <h2>Bounded type parameters</h2>
+  <pre><code>public static &lt;T extends Number&gt; double sum(List&lt;T&gt; numbers) {
+    double total = 0;
+    for (T n : numbers) total += n.doubleValue();   // allowed: T is a Number
+    return total;
+}
+
+sum(List.of(1, 2, 3));          // fine
+sum(List.of("a", "b"));         // compile error</code></pre>
+  <pre><code>public static &lt;T extends Comparable&lt;T&gt;&gt; T max(List&lt;T&gt; items) {
+    T best = items.get(0);
+    for (T item : items) if (item.compareTo(best) &gt; 0) best = item;
+    return best;
+}
+
+// multiple bounds: one class (first) and any number of interfaces
+public static &lt;T extends Number &amp; Comparable&lt;T&gt;&gt; T clamp(T v, T lo, T hi) { ... }</code></pre>
+  <p>Note that <code>extends</code> here means "is a subtype of", and works for interfaces too.</p>
+
+  <h2>Generics are not covariant</h2>
+  <pre><code>List&lt;String&gt; strings = new ArrayList&lt;&gt;();
+List&lt;Object&gt; objects = strings;      // compile error, even though String is an Object</code></pre>
+  <p>If that were allowed, someone could <code>objects.add(42)</code> and your <code>List&lt;String&gt;</code> would
+     contain an Integer. Arrays <em>are</em> covariant, which is exactly why they can throw
+     <code>ArrayStoreException</code> at runtime. Generics chose compile-time safety instead.</p>
+
+  <h2>Wildcards</h2>
+  <pre><code>void printAll(List&lt;?&gt; items) {                 // unknown type: read as Object, cannot add
+    for (Object o : items) System.out.println(o);
+}
+
+double sum(List&lt;? extends Number&gt; numbers) {   // upper bound: PRODUCER — you read Numbers
+    double total = 0;
+    for (Number n : numbers) total += n.doubleValue();
+    return total;
+    // numbers.add(1) would not compile: the actual type might be List&lt;Double&gt;
+}
+
+void addNumbers(List&lt;? super Integer&gt; target) { // lower bound: CONSUMER — you write Integers
+    target.add(1);
+    target.add(2);
+    // reading gives you Object
+}</code></pre>
+  <div class="note">
+    <strong>PECS</strong>
+    <em>Producer Extends, Consumer Super.</em> If the parameter produces values for you to read, use
+    <code>? extends T</code>. If it consumes values you write into it, use <code>? super T</code>. If it does both,
+    use plain <code>T</code>.
+  </div>
+  <p>You will meet this constantly in the standard library:</p>
+  <pre><code>Collections.copy(List&lt;? super T&gt; dest, List&lt;? extends T&gt; src);
+Stream&lt;R&gt; map(Function&lt;? super T, ? extends R&gt; mapper);</code></pre>
+
+  <h2>Type erasure and its consequences</h2>
+  <p>Generics exist only at compile time; the bytecode keeps no type arguments. <code>List&lt;String&gt;</code> and
+     <code>List&lt;Integer&gt;</code> are the same class at runtime. That explains several limitations:</p>
+  <pre><code>list instanceof List&lt;String&gt;      // illegal — the information is gone
+T item = new T();                  // illegal — cannot instantiate a type parameter
+T[] array = new T[10];             // illegal — use (T[]) new Object[10] with @SuppressWarnings
+static T field;                     // illegal — static members cannot use the class's T
+
+void handle(List&lt;String&gt; l) { }
+void handle(List&lt;Integer&gt; l) { }   // illegal — same erased signature</code></pre>
+  <p>Workaround when you truly need the runtime type: pass a <code>Class&lt;T&gt;</code> token.</p>
+  <pre><code>public static &lt;T&gt; T parse(String json, Class&lt;T&gt; type) { ... }
+Order o = parse(body, Order.class);</code></pre>
+
+  <h2>Generic interfaces you already use</h2>
+  <pre><code>public interface Repository&lt;T, ID&gt; {          // exactly the shape Spring Data uses
+    Optional&lt;T&gt; findById(ID id);
+    List&lt;T&gt; findAll();
+    T save(T entity);
+    void deleteById(ID id);
+}
+
+public class UserRepository implements Repository&lt;User, Long&gt; {
+    @Override public Optional&lt;User&gt; findById(Long id) { ... }
+    ...
+}</code></pre>
+  <p>When you later write <code>interface UserRepository extends JpaRepository&lt;User, Long&gt;</code> in Spring, this
+     is all that is happening.</p>
+
+  <h2>Raw types and warnings</h2>
+  <pre><code>List raw = new ArrayList();       // raw type: generics switched off, unchecked warnings
+raw.add("anything");</code></pre>
+  <p>Raw types exist only for compatibility with pre-2004 code. Never write one. Do not sprinkle
+     <code>@SuppressWarnings("unchecked")</code> to silence the compiler either — if you must use it, keep it on the
+     narrowest possible scope and add a comment explaining why the cast is safe.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Write a generic <code>Stack&lt;T&gt;</code> with <code>push</code>, <code>pop</code>, <code>peek</code> and
+          <code>isEmpty</code>, throwing on an empty pop.</li>
+      <li>Write <code>&lt;T&gt; List&lt;T&gt; firstN(List&lt;T&gt; list, int n)</code> that returns at most the first
+          n elements.</li>
+      <li>Write <code>&lt;T extends Comparable&lt;T&gt;&gt; T max(List&lt;T&gt;)</code> and use it on strings, integers
+          and your own <code>Comparable</code> class.</li>
+      <li>Write a method that copies from a <code>List&lt;? extends T&gt;</code> into a
+          <code>List&lt;? super T&gt;</code> and explain each wildcard.</li>
+      <li>Try to write <code>new T()</code> inside a generic class, read the error, then implement the same thing with
+          a <code>Supplier&lt;T&gt;</code> parameter.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Logging, Actuator and metrics — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="14-observability.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Logging, Actuator and metrics</h1>
+  <p class="lead">When something breaks in production you cannot attach a debugger. What you have is logs, health
+     checks and metrics — so make them good before you need them.</p>
+
+  <h2>Logging</h2>
+  <p>Boot ships SLF4J as the API and Logback as the implementation. Always code against SLF4J.</p>
+  <pre><code>public class TaskService {
+
+    private static final Logger log = LoggerFactory.getLogger(TaskService.class);
+
+    public void complete(Long id) {
+        log.info("Completing task {}", id);                  // placeholders, not concatenation
+        try {
+            ...
+        } catch (Exception e) {
+            log.error("Failed to complete task {}", id, e);   // exception LAST, no placeholder
+        }
+    }
+}</code></pre>
+  <pre><code>@Slf4j                       // Lombok, if the project uses it
+public class TaskService { }</code></pre>
+  <p>Why <code>{}</code> matters: with concatenation the string is built even when the level is disabled. With
+     placeholders it is not, and structured log processors can parse the parameters separately.</p>
+
+  <h3>Levels</h3>
+  <table>
+    <tr><td><code>ERROR</code></td><td>Something failed and needs attention. Someone may be paged.</td></tr>
+    <tr><td><code>WARN</code></td><td>Unexpected but handled — a retry, a fallback, a deprecated call.</td></tr>
+    <tr><td><code>INFO</code></td><td>Notable business events: started, order placed, user registered.</td></tr>
+    <tr><td><code>DEBUG</code></td><td>Detail for diagnosing, off in production by default.</td></tr>
+    <tr><td><code>TRACE</code></td><td>Very fine-grained; rarely enabled.</td></tr>
+  </table>
+  <pre><code>logging:
+  level:
+    root: INFO
+    com.example.tasks: DEBUG
+    org.hibernate.SQL: DEBUG
+  file:
+    name: logs/app.log
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      max-history: 7</code></pre>
+
+  <h3>What to log, and what never to</h3>
+  <ul>
+    <li><strong>Do</strong> log the start and outcome of significant operations, with identifiers you can search
+        (order id, user id, correlation id).</li>
+    <li><strong>Do</strong> log the full exception object — not <code>e.getMessage()</code>, which throws away the
+        stack trace.</li>
+    <li><strong>Do not</strong> log passwords, tokens, card numbers, or personal data beyond an id. GDPR applies to log
+        files.</li>
+    <li><strong>Do not</strong> log inside tight loops, or at INFO for every request detail — noise makes the useful
+        lines invisible and costs real money in log storage.</li>
+    <li><strong>Do not</strong> use <code>System.out.println</code>. It bypasses levels, formatting and appenders.</li>
+  </ul>
+
+  <h3>Correlation ids (MDC)</h3>
+  <pre><code>@Component
+public class CorrelationIdFilter extends OncePerRequestFilter {
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
+            throws ServletException, IOException {
+
+        String id = Optional.ofNullable(req.getHeader("X-Correlation-Id"))
+                            .orElse(UUID.randomUUID().toString());
+        MDC.put("correlationId", id);
+        res.setHeader("X-Correlation-Id", id);
+        try {
+            chain.doFilter(req, res);
+        } finally {
+            MDC.clear();                    // essential: threads are reused
+        }
+    }
+}</code></pre>
+  <pre><code>logging:
+  pattern:
+    console: "%d{HH:mm:ss} [%X{correlationId}] %-5level %logger{36} - %msg%n"</code></pre>
+  <p>Now every log line from one request shares an id, and the client has it too — so a support ticket maps directly to
+     the exact lines. Spring's Micrometer Tracing does this and more (span ids across services) if you add it.</p>
+
+  <h3>Structured logging</h3>
+  <pre><code>logging:
+  structured:
+    format:
+      console: ecs        # Boot 3.4+: JSON output for log aggregators</code></pre>
+  <p>In containerised environments log JSON to stdout and let the platform collect it. Do not write log files inside a
+     container.</p>
+
+  <h2>Actuator</h2>
+  <pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-actuator&lt;/artifactId&gt;
+&lt;/dependency&gt;</code></pre>
+  <pre><code>management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus     # expose deliberately, never "*" in production
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+  info:
+    env:
+      enabled: true</code></pre>
+  <table>
+    <tr><td><code>/actuator/health</code></td><td>UP/DOWN, aggregating database, disk and custom checks</td></tr>
+    <tr><td><code>/actuator/health/liveness</code>, <code>/readiness</code></td><td>Kubernetes probes</td></tr>
+    <tr><td><code>/actuator/info</code></td><td>Build version, git commit</td></tr>
+    <tr><td><code>/actuator/metrics</code></td><td>JVM, HTTP, datasource metrics</td></tr>
+    <tr><td><code>/actuator/prometheus</code></td><td>Metrics in Prometheus format</td></tr>
+    <tr><td><code>/actuator/loggers</code></td><td>Read and <em>change</em> log levels at runtime</td></tr>
+    <tr><td><code>/actuator/env</code>, <code>/heapdump</code>, <code>/threaddump</code></td><td>Powerful and
+        sensitive — never expose publicly</td></tr>
+  </table>
+  <div class="warn">
+    <strong>Actuator endpoints are an attack surface</strong>
+    <code>/env</code> can reveal configuration, <code>/heapdump</code> can reveal everything in memory. Expose only
+    <code>health</code> and <code>info</code> publicly, secure the rest behind authentication or bind them to an
+    internal management port (<code>management.server.port</code>).
+  </div>
+
+  <h3>A custom health check</h3>
+  <pre><code>@Component
+public class WeatherApiHealthIndicator implements HealthIndicator {
+
+    private final WeatherClient client;
+
+    @Override
+    public Health health() {
+        try {
+            client.ping();
+            return Health.up().withDetail("provider", "weather-api").build();
+        } catch (Exception e) {
+            return Health.down(e).build();
+        }
+    }
+}</code></pre>
+  <p>Keep health checks fast and shallow. A check that calls three downstream services turns their outage into yours,
+     because your orchestrator will restart a perfectly healthy pod.</p>
+
+  <h2>Metrics with Micrometer</h2>
+  <pre><code>@Service
+public class TaskService {
+
+    private final Counter completed;
+    private final Timer processing;
+
+    public TaskService(MeterRegistry registry) {
+        this.completed = Counter.builder("tasks.completed")
+                                .description("Tasks marked done")
+                                .register(registry);
+        this.processing = registry.timer("tasks.processing");
+    }
+
+    public void complete(Long id) {
+        processing.record(() -&gt; {
+            ...
+            completed.increment();
+        });
+    }
+}</code></pre>
+  <pre><code>@Timed(value = "orders.place", percentiles = {0.5, 0.95, 0.99})
+public void placeOrder(...) { }</code></pre>
+  <p>Boot already records HTTP request counts and latencies per endpoint and status, JVM memory, GC, thread counts and
+     connection-pool usage. Add your own only for business events worth graphing.</p>
+  <p>Cardinality warning: never use a user id, order id or free-text value as a metric tag. Each distinct value creates
+     a separate time series and will exhaust your monitoring system.</p>
+
+  <h2>The four questions a service should answer</h2>
+  <ol>
+    <li><strong>Is it up?</strong> — health endpoint, uptime.</li>
+    <li><strong>Is it fast?</strong> — latency percentiles (p95, p99, not averages).</li>
+    <li><strong>Is it failing?</strong> — error rate by endpoint and status.</li>
+    <li><strong>Why?</strong> — logs with correlation ids, and traces if you have them.</li>
+  </ol>
+
+  <h2>Graceful shutdown</h2>
+  <pre><code>server:
+  shutdown: graceful
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s</code></pre>
+  <p>On SIGTERM the server stops accepting new requests and finishes in-flight ones. Without this, a deployment drops
+     requests every time.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Replace every <code>System.out.println</code> in your project with a properly levelled logger.</li>
+      <li>Add the correlation-id filter and confirm the id appears in every line of one request and in the response
+          header.</li>
+      <li>Enable Actuator, expose health and info, and add build info to <code>/actuator/info</code>.</li>
+      <li>Write a custom <code>HealthIndicator</code> and make it report DOWN on purpose.</li>
+      <li>Add a counter and a timer for a business operation and read them from
+          <code>/actuator/metrics</code>.</li>
+      <li>Change a log level at runtime through <code>/actuator/loggers</code> without restarting.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

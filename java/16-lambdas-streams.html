@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lambdas and streams — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="16-lambdas-streams.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Lambdas and streams</h1>
+  <p class="lead">Java 8's headline feature and now the default way to express data transformations. Modern Java code
+     is full of it, so reading it fluently matters as much as writing it.</p>
+
+  <h2>Lambdas</h2>
+  <p>A lambda is a compact implementation of a functional interface — an interface with exactly one abstract method.</p>
+  <pre><code>// the same thing, three ways
+Runnable r1 = new Runnable() {
+    @Override public void run() { System.out.println("hi"); }
+};
+Runnable r2 = () -&gt; System.out.println("hi");
+Runnable r3 = () -&gt; {
+    System.out.println("hi");
+    System.out.println("multiple statements need braces");
+};</code></pre>
+  <pre><code>(String s) -&gt; s.length()      // explicit parameter type
+s -&gt; s.length()               // inferred — the usual style
+(a, b) -&gt; a + b               // two parameters
+() -&gt; 42                      // none
+x -&gt; { return x * 2; }        // block body needs an explicit return</code></pre>
+  <p>A lambda can read local variables from the enclosing scope, but they must be final or effectively final (never
+     reassigned):</p>
+  <pre><code>int factor = 3;
+Function&lt;Integer, Integer&gt; times = n -&gt; n * factor;   // fine
+// factor = 4;   ← adding this makes the lambda above fail to compile</code></pre>
+
+  <h2>The standard functional interfaces</h2>
+  <table>
+    <tr><th>Interface</th><th>Method</th><th>Meaning</th></tr>
+    <tr><td><code>Function&lt;T,R&gt;</code></td><td><code>R apply(T)</code></td><td>transform a value</td></tr>
+    <tr><td><code>Predicate&lt;T&gt;</code></td><td><code>boolean test(T)</code></td><td>a yes/no question</td></tr>
+    <tr><td><code>Consumer&lt;T&gt;</code></td><td><code>void accept(T)</code></td><td>do something with a value</td></tr>
+    <tr><td><code>Supplier&lt;T&gt;</code></td><td><code>T get()</code></td><td>produce a value on demand</td></tr>
+    <tr><td><code>BiFunction&lt;T,U,R&gt;</code></td><td><code>R apply(T,U)</code></td><td>two inputs, one output</td></tr>
+    <tr><td><code>UnaryOperator&lt;T&gt;</code></td><td><code>T apply(T)</code></td><td>same type in and out</td></tr>
+    <tr><td><code>BinaryOperator&lt;T&gt;</code></td><td><code>T apply(T,T)</code></td><td>combine two of a kind</td></tr>
+  </table>
+  <pre><code>Predicate&lt;String&gt; isLong = s -&gt; s.length() &gt; 5;
+Predicate&lt;String&gt; startsA = s -&gt; s.startsWith("a");
+isLong.and(startsA).test("abcdefg");    // true — predicates compose
+isLong.negate().test("hi");             // true
+
+Function&lt;Integer,Integer&gt; twice = n -&gt; n * 2;
+Function&lt;Integer,Integer&gt; plus3 = n -&gt; n + 3;
+twice.andThen(plus3).apply(5);          // 13
+twice.compose(plus3).apply(5);          // 16</code></pre>
+
+  <h2>Method references</h2>
+  <pre><code>s -&gt; s.toUpperCase()          →   String::toUpperCase       // instance method of the parameter
+s -&gt; System.out.println(s)    →   System.out::println       // instance method of an object
+s -&gt; Integer.parseInt(s)      →   Integer::parseInt         // static method
+s -&gt; new StringBuilder(s)     →   StringBuilder::new        // constructor</code></pre>
+  <p>Use one when the lambda does nothing but call an existing method.</p>
+
+  <h2>Streams</h2>
+  <p>A stream is a pipeline over a source. It does not store data and does not modify the source; it describes a
+     computation.</p>
+  <pre><code>List&lt;String&gt; result = names.stream()          // 1. source
+        .filter(n -&gt; n.length() &gt; 3)          // 2. intermediate (lazy)
+        .map(String::toUpperCase)             //    intermediate
+        .sorted()                             //    intermediate
+        .toList();                            // 3. terminal — runs the whole pipeline</code></pre>
+  <p>Nothing happens until the terminal operation. A stream can be consumed only once.</p>
+
+  <h3>Creating streams</h3>
+  <pre><code>list.stream()
+Arrays.stream(array)
+Stream.of("a", "b", "c")
+IntStream.range(0, 10)              // 0..9
+IntStream.rangeClosed(1, 10)        // 1..10
+Files.lines(path)                   // stream of lines, remember to close
+Stream.iterate(1, n -&gt; n * 2).limit(10)
+map.entrySet().stream()</code></pre>
+
+  <h3>Intermediate operations</h3>
+  <pre><code>.filter(p -&gt; p.age() &gt;= 18)          keep matching elements
+.map(Person::name)                   transform each element
+.flatMap(order -&gt; order.items().stream())   flatten nested collections
+.distinct()                          remove duplicates (uses equals)
+.sorted()                            natural order
+.sorted(Comparator.comparing(Person::age))
+.limit(10)   .skip(5)                pagination
+.peek(System.out::println)           debugging only
+.takeWhile(n -&gt; n &lt; 100)             Java 9+
+.dropWhile(n -&gt; n &lt; 100)</code></pre>
+
+  <h3>Terminal operations</h3>
+  <pre><code>.toList()                            Java 16+, immutable  ← default choice
+.collect(Collectors.toList())        older equivalent
+.collect(Collectors.toSet())
+.forEach(System.out::println)
+.count()
+.anyMatch(p -&gt; p.age() &gt; 65)   .allMatch(...)   .noneMatch(...)
+.findFirst()   .findAny()             → Optional
+.min(comparator)   .max(comparator)   → Optional
+.reduce(0, Integer::sum)
+.mapToInt(Person::age).sum()
+.mapToInt(Person::age).average()      → OptionalDouble
+.mapToInt(Person::age).summaryStatistics()   // count, sum, min, max, average at once</code></pre>
+
+  <h3>Collectors worth knowing</h3>
+  <pre><code>// join into a string
+String names = people.stream().map(Person::name).collect(Collectors.joining(", "));
+
+// group
+Map&lt;String, List&lt;Person&gt;&gt; byCity =
+    people.stream().collect(Collectors.groupingBy(Person::city));
+
+// group and count
+Map&lt;String, Long&gt; countByCity =
+    people.stream().collect(Collectors.groupingBy(Person::city, Collectors.counting()));
+
+// group and aggregate
+Map&lt;String, Double&gt; avgAgeByCity =
+    people.stream().collect(Collectors.groupingBy(Person::city,
+                            Collectors.averagingInt(Person::age)));
+
+// split in two
+Map&lt;Boolean, List&lt;Person&gt;&gt; adults =
+    people.stream().collect(Collectors.partitioningBy(p -&gt; p.age() &gt;= 18));
+
+// build a map
+Map&lt;Long, Person&gt; byId =
+    people.stream().collect(Collectors.toMap(Person::id, p -&gt; p));</code></pre>
+  <div class="warn">
+    <strong>toMap throws on duplicate keys</strong>
+    <code>IllegalStateException: Duplicate key</code>. Supply a merge function when duplicates are possible:
+    <code>Collectors.toMap(Person::city, Person::name, (a, b) -&gt; a)</code>.
+  </div>
+
+  <h2>Before and after</h2>
+  <pre><code>// imperative
+List&lt;String&gt; result = new ArrayList&lt;&gt;();
+for (Person p : people) {
+    if (p.age() &gt;= 18 &amp;&amp; p.city().equals("Berlin")) {
+        result.add(p.name().toUpperCase());
+    }
+}
+result.sort(Comparator.naturalOrder());
+
+// declarative
+List&lt;String&gt; result = people.stream()
+        .filter(p -&gt; p.age() &gt;= 18)
+        .filter(p -&gt; p.city().equals("Berlin"))
+        .map(p -&gt; p.name().toUpperCase())
+        .sorted()
+        .toList();</code></pre>
+
+  <h2>Pitfalls</h2>
+  <ul>
+    <li><strong>Side effects.</strong> Do not mutate an outside collection from inside <code>forEach</code> or
+        <code>map</code>; collect the result instead.</li>
+    <li><strong>Streams are single-use.</strong> Reusing one throws <code>IllegalStateException</code>.</li>
+    <li><strong>Not always clearer.</strong> A simple loop over three elements does not need a pipeline. Debugging a
+        long chain is harder than stepping through a loop.</li>
+    <li><strong><code>parallelStream()</code> is not free speed.</strong> It helps only for large datasets and
+        CPU-bound, side-effect-free work. Measure before using it; never use it for I/O.</li>
+    <li><strong>Nulls.</strong> Streams do not like them. Filter them out early:
+        <code>.filter(Objects::nonNull)</code>.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>From a list of <code>Product</code>, get the names of products under €20, sorted alphabetically.</li>
+      <li>Compute the total value of stock (<code>price × quantity</code>) with a stream.</li>
+      <li>Group orders by status and count each group.</li>
+      <li>Find the oldest person in each city, returning
+          <code>Map&lt;String, Optional&lt;Person&gt;&gt;</code>.</li>
+      <li>Take a list of sentences and produce a sorted list of distinct words using <code>flatMap</code>.</li>
+      <li>Rewrite three loops from earlier lessons as streams — then decide honestly which version reads better.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

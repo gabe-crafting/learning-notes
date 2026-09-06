@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exceptions — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="13-exceptions.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Exceptions</h1>
+  <p class="lead">How Java reports that something went wrong, and how to handle it without hiding the problem.</p>
+
+  <h2>The hierarchy</h2>
+  <pre><code>Throwable
+├── Error                       serious JVM problems — do not catch
+│   ├── OutOfMemoryError
+│   └── StackOverflowError
+└── Exception
+    ├── RuntimeException        UNCHECKED — compiler does not force handling
+    │   ├── NullPointerException
+    │   ├── IllegalArgumentException
+    │   ├── IllegalStateException
+    │   ├── IndexOutOfBoundsException
+    │   ├── NumberFormatException
+    │   └── ArithmeticException
+    ├── IOException             CHECKED — must be caught or declared
+    ├── SQLException
+    └── (your own)</code></pre>
+
+  <h2>Checked versus unchecked</h2>
+  <table>
+    <tr><th></th><th>Checked</th><th>Unchecked (RuntimeException)</th></tr>
+    <tr><td>Compiler</td><td>Forces <code>catch</code> or <code>throws</code></td><td>Says nothing</td></tr>
+    <tr><td>Means</td><td>An expected failure of the outside world</td><td>A bug, or invalid use of your API</td></tr>
+    <tr><td>Examples</td><td>File missing, network down, SQL error</td><td>Null reference, bad index, invalid argument</td></tr>
+  </table>
+  <p>Modern Java code — and Spring in particular — leans heavily on unchecked exceptions, because forcing every caller
+     to handle every failure produces layers of pointless wrapping. Use checked exceptions when the caller can
+     realistically recover; use unchecked ones for programming errors and unrecoverable conditions.</p>
+
+  <h2>try / catch / finally</h2>
+  <pre><code>try {
+    int result = Integer.parseInt(input);
+    System.out.println(100 / result);
+} catch (NumberFormatException e) {
+    System.out.println("Not a number: " + input);
+} catch (ArithmeticException e) {
+    System.out.println("Division by zero");
+} finally {
+    System.out.println("Always runs — success, failure or return");
+}</code></pre>
+  <p>Catch blocks are tried in order, so list specific types before general ones. Multi-catch handles several the same
+     way:</p>
+  <pre><code>catch (NumberFormatException | ArithmeticException e) {
+    log.warn("Bad input: {}", e.getMessage());
+}</code></pre>
+
+  <h2>try-with-resources</h2>
+  <pre><code>// anything implementing AutoCloseable is closed automatically, in reverse order
+try (BufferedReader reader = Files.newBufferedReader(path);
+     Connection conn = dataSource.getConnection()) {
+
+    return reader.readLine();
+
+} catch (IOException e) {
+    throw new UncheckedIOException(e);
+}</code></pre>
+  <p>Always prefer this to closing in <code>finally</code> — it is shorter and it handles the case where
+     <code>close()</code> itself throws.</p>
+
+  <h2>throw and throws</h2>
+  <pre><code>public void setAge(int age) {
+    if (age &lt; 0) {
+        throw new IllegalArgumentException("Age cannot be negative: " + age);   // throw = raise it now
+    }
+    this.age = age;
+}
+
+public String readConfig(Path path) throws IOException {   // throws = I do not handle this
+    return Files.readString(path);
+}</code></pre>
+
+  <h2>Custom exceptions</h2>
+  <pre><code>public class InsufficientFundsException extends RuntimeException {
+
+    private final BigDecimal shortfall;
+
+    public InsufficientFundsException(BigDecimal shortfall) {
+        super("Insufficient funds: short by " + shortfall);
+        this.shortfall = shortfall;
+    }
+
+    public BigDecimal getShortfall() { return shortfall; }
+}</code></pre>
+  <p>Write one when callers need to distinguish this failure from others. Give it the data needed to react — a
+     shortfall, an id, a field name. Extend <code>RuntimeException</code> unless you deliberately want the compiler to
+     force handling.</p>
+
+  <h2>Preserving the cause</h2>
+  <pre><code>try {
+    return repository.load(id);
+} catch (SQLException e) {
+    throw new DataAccessException("Could not load user " + id, e);   // pass e as the cause!
+}</code></pre>
+  <div class="warn">
+    <strong>Never drop the cause</strong>
+    <code>throw new DataAccessException("failed")</code> without the original exception throws away the stack trace
+    that says what actually happened. Debugging that is guesswork.
+  </div>
+
+  <h2>Anti-patterns</h2>
+  <pre><code>// 1. Swallowing
+try { risky(); } catch (Exception e) { }              // failure becomes invisible
+
+// 2. Printing and continuing as if nothing happened
+try { risky(); } catch (Exception e) { e.printStackTrace(); }
+
+// 3. Catching Exception (or Throwable) indiscriminately
+try { risky(); } catch (Exception e) { ... }          // also catches bugs you wanted to see
+
+// 4. Control flow by exception
+try { return list.get(i); } catch (IndexOutOfBoundsException e) { return null; }
+
+// 5. Losing the message
+throw new RuntimeException();                          // says nothing to whoever reads the log</code></pre>
+  <p>What good handling looks like:</p>
+  <pre><code>try {
+    return paymentGateway.charge(request);
+} catch (GatewayTimeoutException e) {
+    log.warn("Payment gateway timed out for order {}", order.id(), e);
+    return PaymentResult.retryLater();
+}</code></pre>
+  <p>Catch what you can actually do something about; let everything else travel up to a layer that can decide. In a web
+     application that layer is usually a single global handler (Spring's <code>@RestControllerAdvice</code>) that turns
+     exceptions into HTTP responses.</p>
+
+  <h2>Reading a stack trace</h2>
+  <pre><code>Exception in thread "main" java.lang.NullPointerException:
+        Cannot invoke "String.length()" because "name" is null
+    at com.example.UserService.validate(UserService.java:42)     ← where it was thrown
+    at com.example.UserService.register(UserService.java:28)     ← who called that
+    at com.example.Main.main(Main.java:12)                       ← the entry point
+Caused by: java.sql.SQLException: connection refused             ← the real culprit
+    at ...</code></pre>
+  <p>Read top line for <em>what</em>, first line of your own package for <em>where</em>, and always scroll to
+     "Caused by" — the root cause is at the bottom.</p>
+
+  <h2>finally and return</h2>
+  <pre><code>static int tricky() {
+    try {
+        return 1;
+    } finally {
+        System.out.println("finally still runs");   // prints, then 1 is returned
+    }
+}</code></pre>
+  <p>Never <code>return</code> from a <code>finally</code> block: it discards any exception in flight and silently
+     changes the result.</p>
+
+  <h2>Validation helpers</h2>
+  <pre><code>Objects.requireNonNull(order, "order must not be null");
+
+if (amount &lt;= 0) throw new IllegalArgumentException("amount must be positive");   // bad argument
+if (!isOpen)     throw new IllegalStateException("Account is closed");            // wrong state
+if (found == null) throw new NoSuchElementException("No user with id " + id);</code></pre>
+  <p>Fail fast, at the boundary, with a message that names the offending value. The cost of a good exception message is
+     ten seconds now and hours saved at 3am.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Write <code>parseAge(String)</code> that returns an int and throws <code>IllegalArgumentException</code> with
+          a helpful message for null, non-numeric and negative input. Test all three.</li>
+      <li>Create <code>InsufficientFundsException</code> and use it in a <code>withdraw</code> method; catch it in
+          <code>main</code> and print a user-friendly message.</li>
+      <li>Read a file with try-with-resources, handling <code>NoSuchFileException</code> differently from other
+          <code>IOException</code>s.</li>
+      <li>Deliberately cause a <code>NullPointerException</code> three levels deep and practise reading the stack
+          trace.</li>
+      <li>Find an example of a swallowed exception (write one), then fix it and explain what the fix makes visible.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

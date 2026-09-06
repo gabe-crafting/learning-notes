@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tool calling — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="07-tool-calling.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Tool calling</h1>
+  <p class="lead">Also called function calling. You describe capabilities, the model decides when to use them, your
+     code executes them. This is the mechanism every agent is built on.</p>
+
+  <h2>What actually happens</h2>
+  <div class="warn">
+    <strong>The model never calls anything</strong>
+    It emits a structured request — "call <code>get_weather</code> with <code>{"city": "Cluj"}</code>" — and stops.
+    <em>Your code</em> decides whether to run it, runs it, and sends the result back. Every security boundary lives on
+    your side. Nothing executes that you did not execute.
+  </div>
+  <pre><code>1. You send: messages + tool definitions
+2. Model replies with stop_reason = "tool_use" and a tool_use block
+3. You execute the function
+4. You send back: history + assistant turn + a tool_result block
+5. Model replies with the final answer (or another tool call — loop)</code></pre>
+
+  <h2>Defining tools</h2>
+  <pre><code>tools = [
+    {
+        "name": "search_orders",
+        "description": (
+            "Search a customer's orders. Use when the user asks about an order's "
+            "status, contents, or delivery date. Returns at most 20 orders."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "customer_id": {"type": "string", "description": "Internal customer id"},
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "shipped", "delivered", "cancelled"],
+                    "description": "Optional filter",
+                },
+                "since": {"type": "string", "description": "ISO date, only orders after this"},
+            },
+            "required": ["customer_id"],
+            "additionalProperties": False,
+        },
+    },
+]</code></pre>
+  <p>The description is not documentation — it is the prompt that decides whether the tool gets used correctly. Say what
+     the tool does, <em>when</em> to use it, what it returns, and any limits. Vague descriptions produce tools that are
+     called at the wrong moment or not at all.</p>
+
+  <h2>The loop, written out</h2>
+  <pre><code>import anthropic, json
+
+client = anthropic.Anthropic()
+
+def execute_tool(name: str, args: dict) -> str:
+    if name == "search_orders":
+        return json.dumps(db.search_orders(**args))
+    if name == "cancel_order":
+        return json.dumps(db.cancel_order(**args))
+    raise ValueError(f"unknown tool {name}")
+
+def run(user_input: str, max_iterations: int = 10) -> str:
+    messages = [{"role": "user", "content": user_input}]
+
+    for _ in range(max_iterations):
+        response = client.messages.create(
+            model="claude-opus-5",
+            max_tokens=8000,
+            system=SYSTEM_PROMPT,
+            tools=tools,
+            messages=messages,
+        )
+
+        if response.stop_reason != "tool_use":
+            return "".join(b.text for b in response.content if b.type == "text")
+
+        messages.append({"role": "assistant", "content": response.content})
+
+        results = []
+        for block in response.content:
+            if block.type != "tool_use":
+                continue
+            try:
+                output = execute_tool(block.name, block.input)
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": output,
+                })
+            except Exception as e:
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": f"Error: {e}",
+                    "is_error": True,
+                })
+
+        messages.append({"role": "user", "content": results})
+
+    raise RuntimeError("tool loop did not converge")</code></pre>
+  <p>Five details that matter:</p>
+  <ul>
+    <li><strong>Append the whole <code>response.content</code></strong>, not just the text — the tool_use blocks must be
+        in the history or the results have nothing to attach to.</li>
+    <li><strong><code>tool_use_id</code> must match.</strong></li>
+    <li><strong>Return every result in one user message.</strong> Splitting parallel results across messages teaches the
+        model to stop making parallel calls.</li>
+    <li><strong>Report errors as results</strong> with <code>is_error</code>, do not drop them. The model can often
+        recover — retry with a corrected argument, or explain the failure to the user.</li>
+    <li><strong>Bound the loop.</strong> Always. An unbounded loop is an unbounded bill.</li>
+  </ul>
+
+  <h3>Or let the SDK drive it</h3>
+  <pre><code>from anthropic import beta_tool
+
+@beta_tool
+def search_orders(customer_id: str, status: str | None = None) -> str:
+    """Search a customer's orders.
+
+    Args:
+        customer_id: Internal customer id.
+        status: Optional status filter: pending, shipped, delivered or cancelled.
+    """
+    return json.dumps(db.search_orders(customer_id, status))
+
+runner = client.beta.messages.tool_runner(
+    model="claude-opus-5",
+    max_tokens=8000,
+    tools=[search_orders],
+    messages=[{"role": "user", "content": user_input}],
+)
+
+for message in runner:
+    ...   # each iteration is one turn; the runner executes tools for you</code></pre>
+  <p>The schema is derived from the signature and docstring. Convenient — but write the manual loop once first, because
+     when an agent misbehaves in production you will be debugging exactly those steps.</p>
+
+  <h2>Designing a good tool surface</h2>
+  <ul>
+    <li><strong>Few tools, clearly distinct.</strong> Twenty overlapping tools produce wrong choices. If two tools are
+        easy to confuse, merge them or rename them.</li>
+    <li><strong>Match the user's mental model, not your database.</strong> <code>find_customer_orders</code> beats
+        <code>select_from_orders_join_customers</code>.</li>
+    <li><strong>Return concise, structured results.</strong> Every byte a tool returns enters the context and is billed
+        on every subsequent turn. Return the ten fields that matter, not the row.</li>
+    <li><strong>Make results self-describing.</strong> <code>{"orders": [], "note": "no orders found for this
+        customer"}</code> is far more useful than <code>[]</code>.</li>
+    <li><strong>Prefer idempotent tools</strong>, and make destructive ones require an explicit confirmation
+        argument.</li>
+    <li><strong>Do not expose a raw SQL tool</strong> to a model that talks to untrusted users. If you must, use a
+        read-only role, a query timeout and a row limit.</li>
+  </ul>
+
+  <h3>Sizing tool results</h3>
+  <pre><code># ✗ dumps 40 columns and 500 rows into the context
+return json.dumps([dict(row) for row in cursor.fetchall()])
+
+# ✓ shaped for the model
+return json.dumps({
+    "count": total,
+    "showing": len(rows),
+    "orders": [
+        {"id": r.id, "status": r.status, "total": float(r.total), "placed": r.created.date().isoformat()}
+        for r in rows[:20]
+    ],
+})</code></pre>
+
+  <h2>Controlling when tools are used</h2>
+  <pre><code>tool_choice={"type": "auto"}                        # default: model decides
+tool_choice={"type": "any"}                        # must call some tool
+tool_choice={"type": "tool", "name": "search"}     # must call this one
+tool_choice={"type": "none"}                       # answer without tools</code></pre>
+  <p>Support for the forced variants differs by model and generation — some current models reject them and expect you to
+     use <code>auto</code> plus an explicit instruction, or structured output when the forced call only existed to get
+     JSON back. Check the reference for your model.</p>
+
+  <h2>Parallel calls</h2>
+  <p>One assistant turn can contain several tool_use blocks. Execute them concurrently when they are independent:</p>
+  <pre><code>import asyncio
+
+async def run_tools(blocks) -> list[dict]:
+    async def one(block):
+        output = await execute_tool_async(block.name, block.input)
+        return {"type": "tool_result", "tool_use_id": block.id, "content": output}
+    return await asyncio.gather(*(one(b) for b in blocks))</code></pre>
+  <p>Then return them all in a single user message, as above.</p>
+
+  <h2>Human approval</h2>
+  <pre><code>DANGEROUS = {"cancel_order", "issue_refund", "send_email", "delete_document"}
+
+def execute_tool(name: str, args: dict, *, approved: set[str]) -> str:
+    if name in DANGEROUS and name not in approved:
+        return json.dumps({
+            "status": "declined",
+            "reason": "This action needs user confirmation. Ask the user to confirm, then retry.",
+        })
+    return _run(name, args)</code></pre>
+  <p>Notice that the refusal is returned as a normal tool result. The model then asks the user rather than crashing or
+     silently giving up. Gate by reversibility: reads are free, writes need thought, irreversible external actions
+     (money, email, deletion) need explicit confirmation.</p>
+
+  <h2>Server-side tools</h2>
+  <p>Providers also offer tools that run on their infrastructure — web search, web fetch, code execution — that you
+     declare and do not implement:</p>
+  <pre><code>tools=[
+    {"type": "web_search_20260209", "name": "web_search", "max_uses": 5},
+]</code></pre>
+  <p>Useful for current information and for sandboxed computation you do not want to host. The exact type strings are
+     versioned and model-dependent; look them up rather than copying from a blog post. Note also that server-side tool
+     failures typically come back as a normal response containing an error result, not as a raised exception — check the
+     block, do not just wrap in try/except.</p>
+
+  <h2>MCP, in one paragraph</h2>
+  <p>The Model Context Protocol is a standard way to expose tools and data to models, so a capability written once (a
+     GitHub server, a Postgres server, an internal API server) can be used by any MCP-aware client. Practically: instead
+     of hand-writing a tool per integration, you connect to a server that already publishes them. Worth knowing because
+     it is increasingly how tools are distributed; lesson 14 revisits it in the agent context.</p>
+
+  <h2>Debugging tool use</h2>
+  <table>
+    <tr><th>Symptom</th><th>Cause and fix</th></tr>
+    <tr><td>The tool is never called</td><td>Description too vague, or the system prompt does not mention that the
+        capability exists. Say when to use it.</td></tr>
+    <tr><td>Called with wrong arguments</td><td>Add descriptions and enums to the schema; set
+        <code>strict: True</code>.</td></tr>
+    <tr><td>Called endlessly</td><td>Results are unhelpful or ambiguous, so the model retries. Improve the result
+        payload; cap iterations.</td></tr>
+    <tr><td>Answers without using the tool</td><td>It thinks it already knows. Instruct it that the tool is the source
+        of truth for that data.</td></tr>
+    <tr><td>Slow</td><td>Serial calls; a chatty tool surface. Parallelise and consolidate.</td></tr>
+    <tr><td>Expensive</td><td>Tool results are too large — they are re-sent every turn.</td></tr>
+  </table>
+  <p>Log every tool call and result with the message id. Ninety percent of agent debugging is reading that log and
+     spotting the moment the model was given something confusing.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Build three tools over a small SQLite database (search products, get order, check stock) and write the manual
+          loop.</li>
+      <li>Ask a question requiring two tools in sequence, and print the whole message history to see the loop.</li>
+      <li>Make a tool fail on purpose and confirm the model recovers gracefully with <code>is_error</code>.</li>
+      <li>Add a destructive tool with an approval gate, and verify the model asks before acting.</li>
+      <li>Shrink a fat tool result to the fields that matter and compare the token usage of a five-turn
+          conversation.</li>
+      <li>Rewrite the same agent with the SDK tool runner and note what you gave up in visibility.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

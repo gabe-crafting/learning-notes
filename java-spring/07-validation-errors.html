@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Validation and error handling — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="07-validation-errors.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Validation and error handling</h1>
+  <p class="lead">Reject bad input at the door, and make every failure produce a response a client can actually use.</p>
+
+  <h2>Bean Validation</h2>
+  <pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-validation&lt;/artifactId&gt;
+&lt;/dependency&gt;</code></pre>
+  <pre><code>public record CreateUserRequest(
+
+        @NotBlank(message = "Name is required")
+        @Size(min = 2, max = 100)
+        String name,
+
+        @NotBlank @Email
+        String email,
+
+        @NotNull @Min(18) @Max(120)
+        Integer age,
+
+        @Pattern(regexp = "^\\+?[0-9\\-\\s]{7,20}$", message = "Invalid phone number")
+        String phone,
+
+        @NotNull @Past
+        LocalDate birthDate,
+
+        @NotEmpty
+        List&lt;@NotBlank String&gt; roles) { }</code></pre>
+  <table>
+    <tr><td><code>@NotNull</code></td><td>not null (an empty string passes)</td></tr>
+    <tr><td><code>@NotEmpty</code></td><td>not null and not empty — strings, collections, maps</td></tr>
+    <tr><td><code>@NotBlank</code></td><td>not null and contains non-whitespace — for strings</td></tr>
+    <tr><td><code>@Size(min, max)</code></td><td>length or size</td></tr>
+    <tr><td><code>@Min</code> <code>@Max</code> <code>@Positive</code> <code>@PositiveOrZero</code></td><td>numbers</td></tr>
+    <tr><td><code>@DecimalMin</code> <code>@Digits</code></td><td>BigDecimal amounts</td></tr>
+    <tr><td><code>@Past</code> <code>@Future</code> <code>@FutureOrPresent</code></td><td>dates</td></tr>
+    <tr><td><code>@Email</code> <code>@Pattern</code> <code>@URL</code></td><td>text formats</td></tr>
+    <tr><td><code>@Valid</code></td><td>cascade into a nested object</td></tr>
+  </table>
+
+  <h3>Triggering it</h3>
+  <pre><code>@PostMapping
+public UserResponse create(@RequestBody @Valid CreateUserRequest request) { ... }
+//                                     ↑ without @Valid, nothing is checked</code></pre>
+  <pre><code>@RestController
+@Validated                                        // needed for parameter-level constraints
+public class UserController {
+
+    @GetMapping("/{id}")
+    public UserResponse get(@PathVariable @Min(1) Long id) { ... }
+
+    @GetMapping
+    public List&lt;UserResponse&gt; list(@RequestParam @Max(100) int size) { ... }
+}</code></pre>
+
+  <h3>A custom constraint</h3>
+  <pre><code>@Target({ElementType.FIELD, ElementType.RECORD_COMPONENT})
+@Retention(RetentionPolicy.RUNTIME)
+@Constraint(validatedBy = UniqueEmailValidator.class)
+public @interface UniqueEmail {
+    String message() default "Email is already registered";
+    Class&lt;?&gt;[] groups() default {};
+    Class&lt;? extends Payload&gt;[] payload() default {};
+}
+
+@Component
+public class UniqueEmailValidator implements ConstraintValidator&lt;UniqueEmail, String&gt; {
+
+    private final UserRepository repository;
+    public UniqueEmailValidator(UserRepository repository) { this.repository = repository; }
+
+    @Override
+    public boolean isValid(String email, ConstraintValidatorContext context) {
+        return email == null || !repository.existsByEmail(email);
+    }
+}</code></pre>
+
+  <h2>What happens without a handler</h2>
+  <pre><code>{
+  "timestamp": "2026-09-05T10:12:31.123+00:00",
+  "status": 400,
+  "error": "Bad Request",
+  "path": "/api/users"
+}</code></pre>
+  <p>Correct status, useless body: the client cannot tell which field was wrong. Fix that once, globally.</p>
+
+  <h2>A global exception handler</h2>
+  <pre><code>public record ApiError(
+        Instant timestamp,
+        int status,
+        String error,
+        String message,
+        String path,
+        Map&lt;String, String&gt; fieldErrors) { }</code></pre>
+  <pre><code>@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ApiError handleValidation(MethodArgumentNotValidException ex, HttpServletRequest req) {
+        Map&lt;String, String&gt; fields = new LinkedHashMap&lt;&gt;();
+        for (FieldError fe : ex.getBindingResult().getFieldErrors()) {
+            fields.put(fe.getField(), fe.getDefaultMessage());
+        }
+        return new ApiError(Instant.now(), 400, "Bad Request",
+                            "Validation failed", req.getRequestURI(), fields);
+    }
+
+    @ExceptionHandler(TaskNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ApiError handleNotFound(TaskNotFoundException ex, HttpServletRequest req) {
+        return new ApiError(Instant.now(), 404, "Not Found",
+                            ex.getMessage(), req.getRequestURI(), Map.of());
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ApiError handleConflict(IllegalStateException ex, HttpServletRequest req) {
+        return new ApiError(Instant.now(), 409, "Conflict",
+                            ex.getMessage(), req.getRequestURI(), Map.of());
+    }
+
+    @ExceptionHandler(Exception.class)
+    @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
+    public ApiError handleEverythingElse(Exception ex, HttpServletRequest req) {
+        log.error("Unhandled exception on {}", req.getRequestURI(), ex);   // log the detail...
+        return new ApiError(Instant.now(), 500, "Internal Server Error",
+                            "Something went wrong", req.getRequestURI(), Map.of());
+        // ...but do not leak stack traces or SQL to the client
+    }
+}</code></pre>
+  <pre><code>{
+  "timestamp": "2026-09-05T10:12:31Z",
+  "status": 400,
+  "error": "Bad Request",
+  "message": "Validation failed",
+  "path": "/api/users",
+  "fieldErrors": {
+    "email": "must be a well-formed email address",
+    "age": "must be greater than or equal to 18"
+  }
+}</code></pre>
+
+  <h2>Domain exceptions</h2>
+  <pre><code>public class TaskNotFoundException extends RuntimeException {
+    public TaskNotFoundException(Long id) {
+        super("Task not found: " + id);
+    }
+}
+
+public class TaskAlreadyCompletedException extends RuntimeException { ... }</code></pre>
+  <p>The service throws them; the handler decides the HTTP status. That keeps the service free of web concerns while
+     still producing correct responses.</p>
+  <p>A shortcut for small applications:</p>
+  <pre><code>@ResponseStatus(HttpStatus.NOT_FOUND)
+public class TaskNotFoundException extends RuntimeException { ... }</code></pre>
+  <p>It works, but it couples a domain class to HTTP. Fine early, worth removing later.</p>
+
+  <h2>Problem Detail (RFC 7807)</h2>
+  <p>Spring 6 supports the standard error format, which is a good default for new APIs:</p>
+  <pre><code>@ExceptionHandler(TaskNotFoundException.class)
+public ProblemDetail handle(TaskNotFoundException ex) {
+    ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+    problem.setTitle("Task not found");
+    problem.setType(URI.create("https://api.example.com/errors/task-not-found"));
+    problem.setProperty("taskId", ex.getId());
+    return problem;
+}</code></pre>
+  <pre><code>spring:
+  mvc:
+    problemdetails:
+      enabled: true       # makes Spring's built-in errors use this format too</code></pre>
+
+  <h2>Exceptions worth handling explicitly</h2>
+  <table>
+    <tr><td><code>MethodArgumentNotValidException</code></td><td>Invalid <code>@RequestBody</code> → 400</td></tr>
+    <tr><td><code>ConstraintViolationException</code></td><td>Invalid path/query parameter → 400</td></tr>
+    <tr><td><code>HttpMessageNotReadableException</code></td><td>Malformed JSON → 400</td></tr>
+    <tr><td><code>MethodArgumentTypeMismatchException</code></td><td><code>/tasks/abc</code> where a Long was expected
+        → 400</td></tr>
+    <tr><td><code>MissingServletRequestParameterException</code></td><td>Required parameter absent → 400</td></tr>
+    <tr><td><code>DataIntegrityViolationException</code></td><td>Unique or FK constraint hit → 409</td></tr>
+    <tr><td><code>AccessDeniedException</code></td><td>Not permitted → 403</td></tr>
+  </table>
+
+  <h2>Rules that keep errors useful</h2>
+  <ul>
+    <li><strong>Log the detail, return the summary.</strong> Stack traces belong in the log, never in the response.</li>
+    <li><strong>Never echo internals</strong> — SQL, class names, file paths, library versions. They are a gift to an
+        attacker.</li>
+    <li><strong>Be consistent.</strong> One error shape for the whole API, so clients can parse it once.</li>
+    <li><strong>Say what to do.</strong> "Validation failed" plus the field errors beats "Bad request".</li>
+    <li><strong>Do not leak whether an account exists</strong> on login or password reset — the same generic message
+        either way.</li>
+    <li><strong>Include a correlation id</strong> in both the log line and the response so a support ticket maps to a
+        log entry.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Add validation annotations to your create and update DTOs and confirm a bad request returns 400.</li>
+      <li>Write a <code>@RestControllerAdvice</code> returning a consistent <code>ApiError</code>, including field
+          errors.</li>
+      <li>Create <code>TaskNotFoundException</code> and map it to 404; verify with <code>curl -i</code>.</li>
+      <li>Write a custom <code>@UniqueEmail</code> constraint backed by the repository.</li>
+      <li>Post malformed JSON and a wrong-typed path variable; handle both explicitly.</li>
+      <li>Convert your handler to return <code>ProblemDetail</code> and compare the two response formats.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

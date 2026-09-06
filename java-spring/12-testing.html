@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Testing Spring applications — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="12-testing.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Testing Spring applications</h1>
+  <p class="lead">Fast unit tests for logic, narrow slices for the web and data layers, and a few full-stack tests with a
+     real database.</p>
+
+  <h2>What the starter gives you</h2>
+  <pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-test&lt;/artifactId&gt;
+    &lt;scope&gt;test&lt;/scope&gt;
+&lt;/dependency&gt;</code></pre>
+  <p>JUnit 5, AssertJ, Mockito, Hamcrest, JSONassert, and Spring's own test support — all in one dependency.</p>
+
+  <h2>Level 1: plain unit tests</h2>
+  <p>Most of your tests should not start Spring at all. If a service takes its dependencies through the constructor,
+     you can build it yourself:</p>
+  <pre><code>class TaskServiceTest {
+
+    private final TaskRepository repository = mock(TaskRepository.class);
+    private final Clock clock = Clock.fixed(Instant.parse("2026-01-01T10:00:00Z"), ZoneOffset.UTC);
+    private final TaskService service = new TaskService(repository, clock);
+
+    @Test
+    void completingAnOpenTaskSetsTheTimestamp() {
+        Task task = new Task("write tests", null);
+        when(repository.findById(1L)).thenReturn(Optional.of(task));
+
+        TaskResponse response = service.complete(1L);
+
+        assertThat(response.done()).isTrue();
+        assertThat(task.getCompletedAt()).isEqualTo(Instant.parse("2026-01-01T10:00:00Z"));
+    }
+
+    @Test
+    void completingATwiceCompletedTaskFails() {
+        Task task = new Task("done already", null);
+        task.setDone(true);
+        when(repository.findById(1L)).thenReturn(Optional.of(task));
+
+        assertThatThrownBy(() -&gt; service.complete(1L))
+                .isInstanceOf(TaskAlreadyCompletedException.class);
+    }
+}</code></pre>
+  <p>Milliseconds per test, no context to start. Note the injected <code>Clock</code> — that is why lesson 3 suggested
+     it; testing "now" is otherwise miserable.</p>
+
+  <h2>Level 2: slices</h2>
+  <p>A slice starts only the part of Spring you are testing.</p>
+
+  <h3>@WebMvcTest — the controller and its JSON</h3>
+  <pre><code>@WebMvcTest(TaskController.class)
+class TaskControllerTest {
+
+    @Autowired MockMvc mvc;
+    @Autowired ObjectMapper json;
+
+    @MockitoBean TaskService service;        // @MockBean in Boot &lt; 3.4
+
+    @Test
+    void returnsTheTaskList() throws Exception {
+        when(service.findAll(null)).thenReturn(List.of(
+                new TaskResponse(1L, "write tests", null, false, null, Instant.EPOCH)));
+
+        mvc.perform(get("/api/tasks"))
+           .andExpect(status().isOk())
+           .andExpect(jsonPath("$", hasSize(1)))
+           .andExpect(jsonPath("$[0].title").value("write tests"));
+    }
+
+    @Test
+    void rejectsABlankTitle() throws Exception {
+        var request = new CreateTaskRequest("  ", null, null);
+
+        mvc.perform(post("/api/tasks")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(request)))
+           .andExpect(status().isBadRequest())
+           .andExpect(jsonPath("$.fieldErrors.title").exists());
+    }
+
+    @Test
+    void returns404WhenMissing() throws Exception {
+        when(service.findById(99L)).thenThrow(new TaskNotFoundException(99L));
+
+        mvc.perform(get("/api/tasks/99")).andExpect(status().isNotFound());
+    }
+}</code></pre>
+  <p>No server, no database — but real routing, real JSON serialisation, real validation and your real exception
+     handler. This is the sweet spot for testing the web layer.</p>
+
+  <h3>@DataJpaTest — repositories</h3>
+  <pre><code>@DataJpaTest
+class TaskRepositoryTest {
+
+    @Autowired TaskRepository repository;
+    @Autowired TestEntityManager em;
+
+    @Test
+    void findsOverdueTasks() {
+        em.persist(new Task("late", LocalDate.now().minusDays(1)));
+        em.persist(new Task("soon", LocalDate.now().plusDays(1)));
+        em.flush();
+
+        assertThat(repository.findByDueDateBefore(LocalDate.now()))
+                .extracting(Task::getTitle)
+                .containsExactly("late");
+    }
+}</code></pre>
+  <p>Each test runs in a transaction that is rolled back afterwards, so tests do not pollute each other.</p>
+
+  <h3>Other slices</h3>
+  <pre><code>@JsonTest             serialisation only
+@RestClientTest       an outbound HTTP client, with MockRestServiceServer
+@DataJdbcTest  @WebFluxTest  @JdbcTest</code></pre>
+
+  <h2>Level 3: the whole application</h2>
+  <pre><code>@SpringBootTest(webEnvironment = WebEnvironment.RANDOM_PORT)
+@AutoConfigureMockMvc
+class TaskApiIntegrationTest {
+
+    @Autowired TestRestTemplate rest;      // or MockMvc
+    @Autowired TaskRepository repository;
+
+    @Test
+    void createsAndThenReadsATask() {
+        var created = rest.postForEntity("/api/tasks",
+                new CreateTaskRequest("integration", null, null), TaskResponse.class);
+
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        var fetched = rest.getForObject("/api/tasks/" + created.getBody().id(), TaskResponse.class);
+        assertThat(fetched.title()).isEqualTo("integration");
+    }
+}</code></pre>
+  <p>These are slow (seconds each), so keep them few and reserve them for the paths that matter most: the main happy
+     path of each feature, and anything security-related.</p>
+
+  <h2>Testcontainers: a real database in tests</h2>
+  <pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-testcontainers&lt;/artifactId&gt;
+    &lt;scope&gt;test&lt;/scope&gt;
+&lt;/dependency&gt;
+&lt;dependency&gt;
+    &lt;groupId&gt;org.testcontainers&lt;/groupId&gt;
+    &lt;artifactId&gt;postgresql&lt;/artifactId&gt;
+    &lt;scope&gt;test&lt;/scope&gt;
+&lt;/dependency&gt;</code></pre>
+  <pre><code>@SpringBootTest
+@Testcontainers
+class TaskIntegrationTest {
+
+    @Container
+    @ServiceConnection                       // Boot wires the datasource automatically
+    static PostgreSQLContainer&lt;?&gt; postgres = new PostgreSQLContainer&lt;&gt;("postgres:16");
+
+    @Test
+    void runsAgainstRealPostgres() { ... }
+}</code></pre>
+  <p>Docker starts a throwaway Postgres for the test run. Your migrations run against it, and dialect differences
+     between H2 and Postgres stop hiding bugs. Declare the container <code>static</code> so it is reused across tests
+     in the class.</p>
+
+  <h2>Mocking a bean inside a context test</h2>
+  <pre><code>@SpringBootTest
+class CheckoutFlowTest {
+
+    @MockitoBean PaymentGateway gateway;      // replaces the real bean in the context
+
+    @Test
+    void doesNotCallTheRealPaymentProvider() { ... }
+}</code></pre>
+  <p>Use it for external systems. Every distinct combination of mocked beans creates a new application context, and
+     contexts are cached per configuration — a suite with many different combinations gets slow, so keep them few.</p>
+
+  <h2>Test data</h2>
+  <pre><code>// a builder or factory keeps tests readable
+static Task aTask() {
+    return new Task("default title", LocalDate.now().plusDays(1));
+}
+
+@Sql("/test-data/tasks.sql")           // run SQL before the test
+@Sql(scripts = "/cleanup.sql", executionPhase = AFTER_TEST_METHOD)</code></pre>
+  <p>Each test should create the data it needs and not depend on what another test left behind. Order-dependent tests
+     are a maintenance disaster.</p>
+
+  <h2>What to test at each level</h2>
+  <table>
+    <tr><th>Level</th><th>Test</th><th>Do not test</th></tr>
+    <tr><td>Unit</td><td>Business rules, calculations, edge cases</td><td>Framework wiring</td></tr>
+    <tr><td><code>@WebMvcTest</code></td><td>Status codes, JSON shape, validation, error mapping</td><td>Business
+        logic (mock the service)</td></tr>
+    <tr><td><code>@DataJpaTest</code></td><td>Custom queries, constraints, mappings</td><td>Spring Data's own
+        methods</td></tr>
+    <tr><td><code>@SpringBootTest</code></td><td>One end-to-end path per feature, security</td><td>Every
+        permutation</td></tr>
+  </table>
+
+  <h2>Habits worth forming</h2>
+  <ul>
+    <li>Name tests after behaviour: <code>rejectsBlankTitle</code>, not <code>test2</code>.</li>
+    <li>One reason to fail per test.</li>
+    <li>Assert on what the user of the code observes, not on internal calls, unless the call <em>is</em> the behaviour
+        (an email being sent, for instance).</li>
+    <li>Fix flaky tests immediately; a suite people ignore is worse than none.</li>
+    <li>When you fix a bug, add the test that would have caught it — first.</li>
+    <li>Keep the whole suite fast enough that you run it before every commit.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Write plain unit tests for your service with mocked repository and a fixed <code>Clock</code>.</li>
+      <li>Write a <code>@WebMvcTest</code> covering 200, 400 (validation) and 404 for one controller.</li>
+      <li>Write a <code>@DataJpaTest</code> for your custom queries.</li>
+      <li>Add Testcontainers and run one full integration test against real Postgres.</li>
+      <li>Add security tests: anonymous → 401, wrong role → 403, right role → 200.</li>
+      <li>Time the suite. If it is over a minute, work out which tests are responsible and whether they need to be that
+          heavy.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

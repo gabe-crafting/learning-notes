@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent architectures and memory — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="14-agent-architectures.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Agent architectures and memory</h1>
+  <p class="lead">Patterns beyond the single loop: planning, delegation, memory across sessions, and the protocols that
+     let agents reach the outside world.</p>
+
+  <h2>Patterns worth knowing</h2>
+  <h3>Prompt chaining</h3>
+  <pre><code>outline = model(f"Write an outline for: {topic}")
+draft   = model(f"Write the article from this outline:\n{outline}")
+final   = model(f"Tighten this draft to 600 words:\n{draft}")</code></pre>
+  <p>Not an agent at all — a pipeline. Each step is simpler and testable in isolation. Reach for this first.</p>
+
+  <h3>Routing</h3>
+  <pre><code>class Route(BaseModel):
+    destination: Literal["billing", "technical", "sales", "other"]
+    confidence: float
+
+route = classify(question, output_format=Route)      # cheap model
+handler = HANDLERS[route.destination]                 # different prompt, tools, maybe model
+return handler(question)</code></pre>
+  <p>One cheap call chooses the specialist. Cheaper and more reliable than one giant prompt that tries to be all things,
+     and each branch can be evaluated separately.</p>
+
+  <h3>Plan and execute</h3>
+  <pre><code>class Step(BaseModel):
+    id: int
+    description: str
+    tool: str
+    depends_on: list[int] = []
+
+class Plan(BaseModel):
+    steps: list[Step]
+
+plan = model.parse(goal, output_format=Plan)          # plan once, explicitly
+for step in topological_order(plan.steps):
+    results[step.id] = execute(step, results)         # execute deterministically</code></pre>
+  <p>Advantages over a free-running loop: the plan is inspectable before anything runs, you can show it to a user for
+     approval, independent steps can run in parallel, and a failed step can be retried without redoing the rest. The
+     cost is rigidity — the plan is made before the agent has seen any results, so allow re-planning when a step
+     surprises it.</p>
+
+  <h3>Evaluator–optimiser</h3>
+  <pre><code>draft = generate(task)
+for _ in range(3):
+    critique = evaluate(draft, criteria)              # a second call, often a stronger model
+    if critique.acceptable:
+        break
+    draft = revise(draft, critique.feedback)</code></pre>
+  <p>Works well where quality is judgeable and iteration is cheap: writing, code, translations. Cap the loop, and make
+     the evaluator's criteria explicit rather than "is this good".</p>
+
+  <h3>Orchestrator and subagents</h3>
+  <pre><code>main agent (goal, keeps the plan and the summary)
+├── researcher subagent  → reads 30 pages, returns 200 words
+├── analyst subagent     → crunches the numbers, returns a table
+└── writer subagent      → composes the final answer</code></pre>
+  <p>The real motivation is context, not "specialisation": a subagent reads a great deal and returns only its
+     conclusion, so the orchestrator's window stays clean. Use a cheaper model for reading-heavy subagents. The costs
+     are latency, complexity and the fact that a subagent cannot ask a clarifying question — its brief must be
+     complete.</p>
+
+  <h3>Reflection</h3>
+  <pre><code>"Before answering, list what you might have missed. Then answer."</code></pre>
+  <p>Cheap, sometimes helpful, and largely subsumed by models with built-in reasoning. Measure rather than assume.</p>
+
+  <h2>Memory</h2>
+  <p>The API is stateless; every kind of "memory" is something you build. Four levels, with different mechanisms:</p>
+  <table>
+    <tr><th>Level</th><th>Scope</th><th>Implementation</th></tr>
+    <tr><td>Working memory</td><td>This turn</td><td>The message list itself</td></tr>
+    <tr><td>Conversation memory</td><td>This session</td><td>Full history, or last-N plus a rolling summary, or
+        server-side compaction</td></tr>
+    <tr><td>Long-term memory</td><td>Across sessions</td><td>Facts stored in a database, retrieved and injected into
+        the prompt</td></tr>
+    <tr><td>Knowledge</td><td>Organisational</td><td>RAG over your documents (lessons 8–12)</td></tr>
+  </table>
+
+  <h3>Conversation memory that does not grow forever</h3>
+  <pre><code>MAX_RECENT = 10
+
+def build_messages(history: list[dict], summary: str | None) -> list[dict]:
+    recent = history[-MAX_RECENT:]
+    if not summary:
+        return recent
+    return [{"role": "user", "content": f"&lt;conversation_summary&gt;{summary}&lt;/conversation_summary&gt;"}] + recent
+
+def maybe_summarise(history: list[dict], summary: str | None) -> str | None:
+    if len(history) &lt;= MAX_RECENT * 2:
+        return summary
+    older = history[:-MAX_RECENT]
+    return cheap_model(
+        "Summarise this conversation in under 200 words. Keep decisions, facts, "
+        "names, numbers and open questions. Drop pleasantries.\n\n"
+        + render(older) + (f"\n\nPrevious summary:\n{summary}" if summary else "")
+    )</code></pre>
+  <p>Note what the summary prompt is told to keep. A summary that loses the customer's order number has cost you the
+     conversation.</p>
+
+  <h3>Long-term memory</h3>
+  <pre><code>class MemoryItem(BaseModel):
+    kind: Literal["preference", "fact", "decision"]
+    text: str
+    confidence: float
+
+# after a session, extract durable facts
+items = model.parse(transcript, output_format=list[MemoryItem])
+for item in items:
+    if item.confidence &gt;= 0.7:
+        store.upsert_memory(user_id, item)          # dedupe against existing memories
+
+# at the start of the next session, retrieve the relevant ones
+memories = store.search_memories(user_id, embed_query(current_topic), k=5)
+system = BASE_SYSTEM + "\n\nKnown about this user:\n" + "\n".join(f"- {m.text}" for m in memories)</code></pre>
+  <div class="warn">
+    <strong>Memory is a privacy and correctness liability</strong>
+    You are storing statements about people, extracted by a model that sometimes gets things wrong. Show users what is
+    remembered, let them delete it, expire stale entries, never store sensitive categories you do not need, and keep it
+    scoped per user — leaking one user's remembered facts into another's session is a serious incident.
+  </div>
+  <p>Some APIs offer a memory tool where the model reads and writes files in a memory directory that you back with real
+     storage; that is the same idea with the retrieval decision handed to the model.</p>
+
+  <h2>MCP: connecting agents to the world</h2>
+  <p>The Model Context Protocol standardises how tools and data sources are exposed to models. A server publishes tools
+     (and resources and prompts); any MCP-aware client can use them. Instead of writing a bespoke integration per
+     system, you connect to a server — for GitHub, Postgres, Slack, your own internal API — and its tools appear.</p>
+  <pre><code># conceptually
+client connects to MCP server → lists tools → passes them to the model as tool definitions
+model calls a tool → client forwards to the server → result returns
+
+# in practice, either:
+#  - your SDK converts MCP tools into API tool definitions, or
+#  - the API connects to a remote MCP server directly (provider-specific parameters)</code></pre>
+  <p>Why it matters to you: it is becoming the default distribution format for agent capabilities, and "have you used
+     MCP" is now a live interview question. The security caveat is the important part — an MCP server is code you are
+     trusting with your tool surface, and a malicious or compromised one can inject instructions into your agent's
+     context. Treat third-party servers like third-party dependencies with network access.</p>
+
+  <h2>Human in the loop</h2>
+  <pre><code>class PendingAction(BaseModel):
+    tool: str
+    arguments: dict
+    rationale: str
+    reversible: bool
+
+# 1. agent proposes  → 2. persist and notify  → 3. human approves/edits/rejects  → 4. resume</code></pre>
+  <p>Design decisions worth making explicitly: which actions require approval (start with everything irreversible), what
+     the human sees (the rationale and the exact arguments, not a summary), what happens on timeout (default to
+     <em>not</em> acting), and how the run resumes — which means the agent state must be persistable, not just an
+     in-memory list.</p>
+
+  <h2>Multi-agent systems: read this before building one</h2>
+  <p>Multi-agent architectures are fashionable and frequently a mistake. They multiply cost by the number of agents,
+     introduce coordination failures that are miserable to debug, and often produce worse results than one well-prompted
+     agent with good tools — because each hand-off loses information.</p>
+  <p>Justified when: subtasks are genuinely independent and parallelisable; a subtask reads far more than the main
+     agent should carry; or different subtasks need genuinely different tools, permissions or models. Otherwise, one
+     agent.</p>
+
+  <h2>Reliability techniques</h2>
+  <ul>
+    <li><strong>Checkpoint state</strong> after every step so a crash or an approval pause can resume rather than
+        restart.</li>
+    <li><strong>Make tool calls idempotent</strong> with client-supplied keys, so a retry cannot double-charge
+        anyone.</li>
+    <li><strong>Dry-run mode</strong> that logs actions without performing them — invaluable for testing and for
+        demos.</li>
+    <li><strong>Circuit breakers</strong> on external tools; degrade gracefully rather than looping on a dead
+        dependency.</li>
+    <li><strong>Timeouts everywhere</strong>, including on the whole run.</li>
+    <li><strong>Store the full trace</strong> of every run. It is your debugger, your eval data and your audit
+        trail.</li>
+  </ul>
+
+  <h2>Choosing an architecture</h2>
+  <table>
+    <tr><th>If the task…</th><th>Use</th></tr>
+    <tr><td>Has fixed known steps</td><td>A pipeline (chaining)</td></tr>
+    <tr><td>Splits into a few known kinds</td><td>Routing</td></tr>
+    <tr><td>Is decomposable up front</td><td>Plan and execute</td></tr>
+    <tr><td>Has judgeable quality</td><td>Evaluator–optimiser</td></tr>
+    <tr><td>Requires open-ended exploration</td><td>A single agent loop</td></tr>
+    <tr><td>Needs heavy independent reading</td><td>Orchestrator with subagents</td></tr>
+    <tr><td>Touches money, customers or data</td><td>Any of the above, plus human approval</td></tr>
+  </table>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Implement routing: a cheap classifier picking between three specialised handlers, each with its own prompt and
+          tools.</li>
+      <li>Implement plan-and-execute for a research task, and print the plan before running it.</li>
+      <li>Add conversation summarisation and prove a 30-turn conversation stays under a token budget without losing key
+          facts.</li>
+      <li>Build long-term memory: extract facts after a session, retrieve them in the next one, and add a "forget"
+          command.</li>
+      <li>Connect to one public MCP server and use its tools from your agent.</li>
+      <li>Add human approval to a destructive action, including persistence so the run survives a restart while
+          waiting.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

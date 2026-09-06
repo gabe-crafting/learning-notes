@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>REST controllers — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="05-rest-controllers.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>REST controllers</h1>
+  <p class="lead">The web layer: mapping HTTP requests to methods, reading input, and returning the right status
+     code.</p>
+
+  <h2>A complete controller</h2>
+  <pre><code>@RestController
+@RequestMapping("/api/tasks")
+public class TaskController {
+
+    private final TaskService service;
+
+    public TaskController(TaskService service) {
+        this.service = service;
+    }
+
+    @GetMapping
+    public List&lt;TaskResponse&gt; list(@RequestParam(required = false) Boolean done) {
+        return service.findAll(done);
+    }
+
+    @GetMapping("/{id}")
+    public TaskResponse getOne(@PathVariable Long id) {
+        return service.findById(id);            // throws if missing → 404 (lesson 7)
+    }
+
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    public TaskResponse create(@RequestBody @Valid CreateTaskRequest request) {
+        return service.create(request);
+    }
+
+    @PutMapping("/{id}")
+    public TaskResponse update(@PathVariable Long id,
+                               @RequestBody @Valid UpdateTaskRequest request) {
+        return service.update(id, request);
+    }
+
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable Long id) {
+        service.delete(id);
+    }
+}</code></pre>
+  <p><code>@RestController</code> = <code>@Controller</code> + <code>@ResponseBody</code>: every return value is
+     serialised to the response body (JSON, via Jackson) rather than resolved as a view name.</p>
+
+  <h2>Mapping annotations</h2>
+  <pre><code>@GetMapping     @PostMapping    @PutMapping     @PatchMapping   @DeleteMapping
+
+@RequestMapping(value = "/search", method = RequestMethod.GET)   // the general form
+@GetMapping(value = "/{id}", produces = MediaType.APPLICATION_JSON_VALUE)
+@PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)</code></pre>
+  <p>Class-level <code>@RequestMapping</code> prefixes every method in the class.</p>
+
+  <h2>Getting data out of the request</h2>
+  <h3>Path variables</h3>
+  <pre><code>@GetMapping("/{id}")
+public TaskResponse get(@PathVariable Long id) { ... }
+
+@GetMapping("/{userId}/tasks/{taskId}")
+public TaskResponse get(@PathVariable Long userId, @PathVariable Long taskId) { ... }
+
+@GetMapping("/{id}")
+public TaskResponse get(@PathVariable("id") Long taskId) { ... }   // when names differ</code></pre>
+
+  <h3>Query parameters</h3>
+  <pre><code>// GET /api/tasks?done=true&amp;page=2&amp;size=20&amp;tag=home&amp;tag=urgent
+@GetMapping
+public List&lt;TaskResponse&gt; list(
+        @RequestParam(required = false) Boolean done,
+        @RequestParam(defaultValue = "0") int page,
+        @RequestParam(defaultValue = "20") int size,
+        @RequestParam List&lt;String&gt; tag) { ... }</code></pre>
+  <p>A missing parameter without <code>required = false</code> or a default produces 400 Bad Request — which is usually
+     what you want.</p>
+
+  <h3>Request body</h3>
+  <pre><code>public record CreateTaskRequest(String title, String description, LocalDate dueDate) { }
+
+@PostMapping
+public TaskResponse create(@RequestBody CreateTaskRequest request) { ... }</code></pre>
+  <p>Jackson maps the JSON onto the record by component name. Unknown fields are ignored by default in Boot; missing
+     ones become <code>null</code> (or 0 for primitives — a good reason to prefer wrapper types in request records).</p>
+
+  <h3>Headers and the rest</h3>
+  <pre><code>@GetMapping("/me")
+public UserResponse me(@RequestHeader("Authorization") String auth,
+                       @RequestHeader(value = "X-Trace-Id", required = false) String traceId,
+                       @CookieValue(value = "session", required = false) String session,
+                       HttpServletRequest request) { ... }</code></pre>
+
+  <h2>Status codes</h2>
+  <table>
+    <tr><td>200 OK</td><td>Successful GET, PUT, PATCH</td></tr>
+    <tr><td>201 Created</td><td>POST that created a resource — add a <code>Location</code> header</td></tr>
+    <tr><td>204 No Content</td><td>Successful DELETE, or an update with nothing to return</td></tr>
+    <tr><td>400 Bad Request</td><td>Malformed or invalid input</td></tr>
+    <tr><td>401 Unauthorized</td><td>Not authenticated (you are nobody)</td></tr>
+    <tr><td>403 Forbidden</td><td>Authenticated but not allowed (you are someone, but not allowed)</td></tr>
+    <tr><td>404 Not Found</td><td>No such resource</td></tr>
+    <tr><td>409 Conflict</td><td>Violates current state — duplicate email, already cancelled</td></tr>
+    <tr><td>422 Unprocessable Entity</td><td>Syntactically fine but semantically invalid (some teams prefer this to
+        400)</td></tr>
+    <tr><td>500 Internal Server Error</td><td>Your bug. Never return this deliberately.</td></tr>
+  </table>
+
+  <h3>Three ways to set one</h3>
+  <pre><code>// 1. annotation — simplest when it is always the same
+@ResponseStatus(HttpStatus.CREATED)
+
+// 2. ResponseEntity — when it varies, or you need headers
+@PostMapping
+public ResponseEntity&lt;TaskResponse&gt; create(@RequestBody @Valid CreateTaskRequest request) {
+    TaskResponse created = service.create(request);
+    URI location = ServletUriComponentsBuilder.fromCurrentRequest()
+            .path("/{id}").buildAndExpand(created.id()).toUri();
+    return ResponseEntity.created(location).body(created);
+}
+
+ResponseEntity.ok(body);
+ResponseEntity.noContent().build();
+ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+
+// 3. throw an exception and map it globally — see lesson 7</code></pre>
+
+  <h2>Designing the URLs</h2>
+  <pre><code>GET    /api/tasks              list
+POST   /api/tasks              create
+GET    /api/tasks/42           read one
+PUT    /api/tasks/42           replace
+PATCH  /api/tasks/42           partial update
+DELETE /api/tasks/42           delete
+GET    /api/users/7/tasks      sub-resource
+POST   /api/tasks/42/complete  a state transition that is not CRUD</code></pre>
+  <ul>
+    <li>Nouns, not verbs: <code>/api/tasks</code>, never <code>/api/getTasks</code>.</li>
+    <li>Plural collection names, consistently.</li>
+    <li>Lowercase with hyphens: <code>/api/task-lists</code>.</li>
+    <li>Version at the root when you need to: <code>/api/v1/tasks</code>.</li>
+    <li>Filtering, sorting and paging are query parameters, not paths.</li>
+    <li>GET must never change state — it is retried and cached by proxies.</li>
+  </ul>
+
+  <h2>Paging and sorting</h2>
+  <pre><code>@GetMapping
+public Page&lt;TaskResponse&gt; list(@PageableDefault(size = 20, sort = "createdAt") Pageable pageable) {
+    return service.findAll(pageable);
+}
+// GET /api/tasks?page=0&amp;size=20&amp;sort=dueDate,desc</code></pre>
+  <p>Spring builds the <code>Pageable</code> from the query string, and the JSON response includes
+     <code>content</code>, <code>totalElements</code>, <code>totalPages</code> and <code>number</code>. Always page
+     collection endpoints — "it is only a few hundred rows" ages badly.</p>
+
+  <h2>Content negotiation and CORS</h2>
+  <pre><code>@CrossOrigin(origins = "http://localhost:3000")     // per controller — fine for development
+@RestController
+public class TaskController { ... }</code></pre>
+  <pre><code>@Configuration
+public class WebConfig implements WebMvcConfigurer {      // global, preferred
+    @Override
+    public void addCorsMappings(CorsRegistry registry) {
+        registry.addMapping("/api/**")
+                .allowedOrigins("https://app.example.com")
+                .allowedMethods("GET", "POST", "PUT", "DELETE");
+    }
+}</code></pre>
+  <p>A browser calling your API from another origin will fail without this — and the error appears in the browser
+     console, not in your server log. It is the number one "my frontend cannot reach my backend" cause.</p>
+
+  <h2>Testing an endpoint by hand</h2>
+  <pre><code>curl http://localhost:8080/api/tasks
+
+curl -X POST http://localhost:8080/api/tasks \
+     -H "Content-Type: application/json" \
+     -d '{"title":"Write tests","dueDate":"2026-10-01"}'
+
+curl -i -X DELETE http://localhost:8080/api/tasks/42     # -i shows the status line and headers</code></pre>
+  <p>An HTTP file in your IDE (<code>requests.http</code>) or a Bruno/Postman collection is worth keeping in the repo so
+     the whole team has the same examples.</p>
+
+  <h2>What does not belong in a controller</h2>
+  <pre><code>@PostMapping
+public TaskResponse create(@RequestBody CreateTaskRequest request) {
+    // ✗ business rules, database calls, email sending, transaction handling
+    // ✓ take input, delegate to the service, shape the response
+    return service.create(request);
+}</code></pre>
+  <p>A controller should be boring and thin. Everything interesting belongs in the service layer — which is the next
+     lesson.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Build a full CRUD controller for <code>Task</code> backed by an in-memory <code>Map</code> in the
+          service.</li>
+      <li>Return 201 with a <code>Location</code> header from the create endpoint and check it with
+          <code>curl -i</code>.</li>
+      <li>Add filtering by <code>done</code> and by <code>tag</code> using query parameters.</li>
+      <li>Add paging with <code>Pageable</code> and inspect the JSON envelope.</li>
+      <li>Call a POST endpoint with a malformed JSON body and note the status code and the message.</li>
+      <li>Design URLs for a blog: posts, comments on a post, publishing a draft. Justify each one.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tooling and project setup — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="02-tooling.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Tooling and project setup</h1>
+  <p class="lead">Get a JDK installed, an IDE that helps rather than hides, and a project layout that matches what
+     every Java team uses.</p>
+
+  <h2>Installing a JDK</h2>
+  <p>"Java" downloads are confusing because several vendors ship the same OpenJDK code. Any of these is fine and free
+     for commercial use:</p>
+  <ul>
+    <li><strong>Eclipse Temurin</strong> (adoptium.net) — the safe default.</li>
+    <li><strong>Amazon Corretto</strong>, <strong>Microsoft Build of OpenJDK</strong>, <strong>Azul Zulu</strong> — same
+        thing, different vendor support.</li>
+    <li><strong>Oracle JDK</strong> — has licence conditions that vary by version; most teams avoid the question
+        entirely by using Temurin.</li>
+  </ul>
+  <p>On Windows the simplest route is a package manager:</p>
+  <pre><code>winget install EclipseAdoptium.Temurin.21.JDK</code></pre>
+  <p>Then open a <em>new</em> terminal and check:</p>
+  <pre><code>java -version
+javac -version</code></pre>
+  <p>If <code>java</code> works but <code>javac</code> does not, you installed a JRE rather than a JDK.</p>
+
+  <h3>Managing several versions</h3>
+  <p>Real work often means one project on Java 17 and another on 21. Tools that switch for you: <strong>SDKMAN!</strong>
+     (Linux/macOS/WSL) and <strong>jenv</strong>. On Windows, setting <code>JAVA_HOME</code> per project or letting your
+     IDE point at a specific JDK is usually enough.</p>
+  <pre><code>echo $JAVA_HOME        # bash / WSL
+$env:JAVA_HOME         # PowerShell</code></pre>
+  <p><code>JAVA_HOME</code> points at the JDK folder (not <code>bin</code>). Maven, Gradle and many scripts read it.</p>
+
+  <h2>Choosing an IDE</h2>
+  <table>
+    <tr><th>IDE</th><th>Notes</th></tr>
+    <tr><td><strong>IntelliJ IDEA Community</strong></td>
+        <td>What most Java teams use. Free edition covers everything in this course; the paid Ultimate edition adds
+            Spring-specific tooling.</td></tr>
+    <tr><td><strong>VS Code</strong> + Extension Pack for Java</td>
+        <td>Lighter, good if you already live in VS Code. Slightly weaker refactoring.</td></tr>
+    <tr><td><strong>Eclipse</strong></td>
+        <td>Still common in older enterprises. You will meet it eventually.</td></tr>
+  </table>
+  <div class="note">
+    <strong>Use the IDE, but know what it hides</strong>
+    Pressing "Run" secretly calls <code>javac</code> and <code>java</code> with a classpath. When a build breaks on a
+    build server that has no IDE, knowing the underlying commands is what lets you fix it.
+  </div>
+
+  <h3>Shortcuts worth learning on day one (IntelliJ)</h3>
+  <table>
+    <tr><td><code>Ctrl+B</code></td><td>Go to the declaration of whatever the caret is on</td></tr>
+    <tr><td><code>Alt+Enter</code></td><td>Fix / import / suggest — the single most useful key</td></tr>
+    <tr><td><code>Ctrl+Alt+L</code></td><td>Reformat code</td></tr>
+    <tr><td><code>Shift+Shift</code></td><td>Search everywhere</td></tr>
+    <tr><td><code>Ctrl+Alt+V</code></td><td>Extract the expression into a variable</td></tr>
+    <tr><td><code>Shift+F6</code></td><td>Rename safely everywhere</td></tr>
+    <tr><td><code>Ctrl+Shift+F10</code></td><td>Run the current class or test</td></tr>
+  </table>
+
+  <h2>The standard project layout</h2>
+  <p>Maven defined it, Gradle adopted it, and effectively every Java project now uses it:</p>
+  <pre><code>my-app/
+├── pom.xml                                  build file (or build.gradle)
+├── src/
+│   ├── main/
+│   │   ├── java/com/example/app/Main.java   production code
+│   │   └── resources/application.properties non-code files
+│   └── test/
+│       ├── java/com/example/app/MainTest.java  tests
+│       └── resources/                          test-only files
+└── target/                                  build output (never committed)</code></pre>
+  <p>Two rules follow from it: the package <code>com.example.app</code> must live in folders
+     <code>com/example/app</code>, and anything under <code>resources</code> ends up on the classpath, readable at
+     runtime.</p>
+
+  <h2>Creating a project</h2>
+  <p>You will use Maven properly in lesson 21; for now, this is enough to generate a skeleton:</p>
+  <pre><code>mvn archetype:generate -DgroupId=com.example -DartifactId=my-app \
+    -DarchetypeArtifactId=maven-archetype-quickstart -DinteractiveMode=false
+cd my-app
+mvn compile          # compile into target/classes
+mvn test             # compile and run tests
+mvn package          # build a jar in target/</code></pre>
+  <p>Or simply let the IDE do it: <em>New Project → Java → Maven</em>. Do it by hand once anyway, so you know what the
+     IDE generated.</p>
+
+  <h2>jshell: a scratchpad for the language</h2>
+  <p>Trying out a snippet does not need a class or a <code>main</code>. Java ships a REPL:</p>
+  <pre><code>$ jshell
+jshell&gt; int x = 21
+x ==&gt; 21
+jshell&gt; "hello".toUpperCase()
+$2 ==&gt; "HELLO"
+jshell&gt; /exit</code></pre>
+  <p>Use it constantly while working through the next few lessons — it removes all ceremony from experimenting.</p>
+
+  <h2>The classpath, briefly</h2>
+  <p>The JVM does not scan your disk for classes; it looks along the <strong>classpath</strong>, a list of folders and
+     jars.</p>
+  <pre><code>java -cp target/classes com.example.app.Main
+java -cp "target/classes;libs/*" com.example.app.Main   # Windows separator is ;  (Linux/macOS use :)</code></pre>
+  <p>"ClassNotFoundException" and "NoClassDefFoundError" almost always mean the classpath is missing something. Build
+     tools construct it for you, which is most of why they exist.</p>
+
+  <h2>Version control from the start</h2>
+  <p>Initialise git in the project and ignore build output:</p>
+  <pre><code>git init
+printf 'target/\n*.class\n.idea/\n*.iml\n' &gt; .gitignore
+git add . &amp;&amp; git commit -m "Initial project skeleton"</code></pre>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Install a JDK 21 and confirm both <code>java -version</code> and <code>javac -version</code> work in a fresh
+          terminal.</li>
+      <li>Create a Maven project called <code>playground</code>, put a <code>Main</code> class in package
+          <code>com.example.playground</code>, and run it from the IDE and from the command line.</li>
+      <li>Open <code>jshell</code> and evaluate five expressions — some arithmetic, some string methods.</li>
+      <li>Commit the project to git with a sensible <code>.gitignore</code>. Confirm <code>target/</code> is not
+          tracked.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

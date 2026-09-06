@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Collections framework — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="14-collections.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Collections framework</h1>
+  <p class="lead">The data structures you will reach for every single day. Knowing which to pick, and why, is a
+     junior-level expectation in every interview and code review.</p>
+
+  <h2>The map of the framework</h2>
+  <pre><code>Iterable
+└── Collection
+    ├── List      ordered, duplicates allowed, indexed
+    │   ├── ArrayList      ← default
+    │   └── LinkedList
+    ├── Set       no duplicates
+    │   ├── HashSet        ← default
+    │   ├── LinkedHashSet  insertion order
+    │   └── TreeSet        sorted
+    └── Queue / Deque
+        ├── ArrayDeque     ← default stack/queue
+        └── PriorityQueue  sorted by priority
+
+Map  (not a Collection)
+├── HashMap        ← default
+├── LinkedHashMap  insertion order
+└── TreeMap        sorted by key</code></pre>
+
+  <h2>List</h2>
+  <pre><code>List&lt;String&gt; names = new ArrayList&lt;&gt;();
+names.add("Ada");
+names.add("Linus");
+names.add(0, "Grace");        // insert at index
+
+names.get(0);                 // "Grace"
+names.set(1, "Ada L.");       // replace
+names.remove("Linus");        // by value
+names.remove(0);              // by index — careful with List&lt;Integer&gt;!
+names.size();
+names.contains("Ada");
+names.indexOf("Ada");
+names.isEmpty();
+names.clear();
+
+for (String n : names) { ... }
+names.forEach(System.out::println);</code></pre>
+
+  <h3>Immutable lists</h3>
+  <pre><code>List&lt;String&gt; fixed = List.of("a", "b", "c");     // Java 9+, immutable, rejects null
+fixed.add("d");                                   // UnsupportedOperationException
+
+List&lt;String&gt; mutable = new ArrayList&lt;&gt;(fixed);   // a modifiable copy
+List&lt;String&gt; view = Collections.unmodifiableList(mutable);  // read-only view</code></pre>
+  <p>Returning <code>List.of(...)</code> or a copy from a getter is how you stop callers mutating your internals.</p>
+
+  <h3>ArrayList versus LinkedList</h3>
+  <table>
+    <tr><th>Operation</th><th>ArrayList</th><th>LinkedList</th></tr>
+    <tr><td><code>get(i)</code></td><td>O(1)</td><td>O(n)</td></tr>
+    <tr><td><code>add</code> at the end</td><td>amortised O(1)</td><td>O(1)</td></tr>
+    <tr><td>insert/remove in the middle</td><td>O(n)</td><td>O(1) once you are there</td></tr>
+    <tr><td>Memory</td><td>compact array</td><td>node objects and pointers</td></tr>
+  </table>
+  <p>Use <code>ArrayList</code>. In practice its cache locality beats <code>LinkedList</code> even in cases the table
+     suggests otherwise; the only common exception is a queue, and <code>ArrayDeque</code> is better there anyway.</p>
+
+  <h2>Set</h2>
+  <pre><code>Set&lt;String&gt; tags = new HashSet&lt;&gt;();
+tags.add("java");
+tags.add("java");            // ignored — returns false
+tags.contains("java");       // O(1)
+tags.remove("java");</code></pre>
+  <table>
+    <tr><td><code>HashSet</code></td><td>No order guaranteed. Fastest. Needs correct <code>hashCode</code>/<code>equals</code>.</td></tr>
+    <tr><td><code>LinkedHashSet</code></td><td>Keeps insertion order, small overhead.</td></tr>
+    <tr><td><code>TreeSet</code></td><td>Sorted; elements must be <code>Comparable</code> or you supply a
+        <code>Comparator</code>. O(log n).</td></tr>
+  </table>
+  <pre><code>// deduplicate while keeping order
+List&lt;String&gt; unique = new ArrayList&lt;&gt;(new LinkedHashSet&lt;&gt;(withDuplicates));
+
+// set algebra
+a.retainAll(b);   // intersection
+a.addAll(b);      // union
+a.removeAll(b);   // difference</code></pre>
+
+  <h2>Map</h2>
+  <pre><code>Map&lt;String, Integer&gt; stock = new HashMap&lt;&gt;();
+stock.put("apple", 5);
+stock.put("apple", 8);              // replaces; returns the old value
+
+stock.get("apple");                 // 8    — null if absent
+stock.getOrDefault("pear", 0);      // 0    — safer
+stock.containsKey("apple");
+stock.remove("apple");
+stock.size();
+
+stock.putIfAbsent("pear", 1);
+stock.computeIfAbsent("pear", k -&gt; expensiveLookup(k));
+stock.merge("apple", 1, Integer::sum);      // add 1, or start at 1 — the counting idiom
+
+for (Map.Entry&lt;String, Integer&gt; e : stock.entrySet()) {
+    System.out.println(e.getKey() + " = " + e.getValue());
+}
+stock.forEach((k, v) -&gt; System.out.println(k + " = " + v));
+stock.keySet();  stock.values();  stock.entrySet();</code></pre>
+
+  <h3>Counting, the idiomatic way</h3>
+  <pre><code>Map&lt;String, Integer&gt; counts = new HashMap&lt;&gt;();
+for (String word : words) {
+    counts.merge(word, 1, Integer::sum);
+}
+
+Map&lt;String, List&lt;Order&gt;&gt; byCustomer = new HashMap&lt;&gt;();
+for (Order o : orders) {
+    byCustomer.computeIfAbsent(o.customerId(), k -&gt; new ArrayList&lt;&gt;()).add(o);
+}</code></pre>
+
+  <h2>hashCode and equals — why they matter here</h2>
+  <pre><code>class Point {
+    int x, y;
+    // no equals/hashCode overridden!
+}
+
+Set&lt;Point&gt; set = new HashSet&lt;&gt;();
+set.add(new Point(1, 1));
+set.add(new Point(1, 1));
+set.size();                       // 2 — they are not "equal" without an equals method</code></pre>
+  <p>Hash-based collections find an element by its hash bucket first, then by <code>equals</code>. Rules:</p>
+  <ul>
+    <li>Equal objects must return equal hash codes.</li>
+    <li><code>hashCode</code> must be stable — never build it from mutable fields you then change while the object sits
+        in a set or map key.</li>
+    <li>Records give you both, correctly, for free.</li>
+  </ul>
+
+  <h2>Deque: stack and queue</h2>
+  <pre><code>Deque&lt;String&gt; stack = new ArrayDeque&lt;&gt;();
+stack.push("a"); stack.push("b");
+stack.pop();      // "b"  — LIFO
+stack.peek();     // "a"  — look without removing
+
+Deque&lt;String&gt; queue = new ArrayDeque&lt;&gt;();
+queue.offer("first"); queue.offer("second");
+queue.poll();     // "first" — FIFO
+
+PriorityQueue&lt;Task&gt; tasks = new PriorityQueue&lt;&gt;(Comparator.comparingInt(Task::priority));</code></pre>
+  <p>The old <code>java.util.Stack</code> and <code>Vector</code> are synchronised legacy classes — do not use them in
+     new code.</p>
+
+  <h2>Iterating and modifying</h2>
+  <pre><code>// ConcurrentModificationException
+for (String name : names) {
+    if (name.isBlank()) names.remove(name);       // boom
+}
+
+// correct: Iterator
+Iterator&lt;String&gt; it = names.iterator();
+while (it.hasNext()) {
+    if (it.next().isBlank()) it.remove();
+}
+
+// simplest: removeIf
+names.removeIf(String::isBlank);</code></pre>
+
+  <h2>Sorting</h2>
+  <pre><code>names.sort(Comparator.naturalOrder());
+names.sort(Comparator.reverseOrder());
+people.sort(Comparator.comparing(Person::lastName)
+                      .thenComparing(Person::firstName));
+people.sort(Comparator.comparingInt(Person::age).reversed());
+Collections.sort(names);          // older equivalent
+Collections.shuffle(names);
+Collections.max(numbers);         Collections.min(numbers);</code></pre>
+
+  <h2>Choosing a collection</h2>
+  <table>
+    <tr><th>You need…</th><th>Use</th></tr>
+    <tr><td>An ordered list you index into</td><td><code>ArrayList</code></td></tr>
+    <tr><td>Uniqueness, order irrelevant</td><td><code>HashSet</code></td></tr>
+    <tr><td>Uniqueness, keep insertion order</td><td><code>LinkedHashSet</code></td></tr>
+    <tr><td>Always-sorted elements</td><td><code>TreeSet</code></td></tr>
+    <tr><td>Key → value lookup</td><td><code>HashMap</code></td></tr>
+    <tr><td>Key → value, sorted keys or range queries</td><td><code>TreeMap</code></td></tr>
+    <tr><td>Stack or queue</td><td><code>ArrayDeque</code></td></tr>
+    <tr><td>Highest-priority item first</td><td><code>PriorityQueue</code></td></tr>
+    <tr><td>Shared across threads</td><td><code>ConcurrentHashMap</code>, <code>CopyOnWriteArrayList</code></td></tr>
+  </table>
+
+  <h2>Big-O worth remembering</h2>
+  <table>
+    <tr><th></th><th>add</th><th>contains / get</th><th>remove</th></tr>
+    <tr><td>ArrayList</td><td>O(1)*</td><td>O(1) by index, O(n) by value</td><td>O(n)</td></tr>
+    <tr><td>HashSet / HashMap</td><td>O(1)</td><td>O(1)</td><td>O(1)</td></tr>
+    <tr><td>TreeSet / TreeMap</td><td>O(log n)</td><td>O(log n)</td><td>O(log n)</td></tr>
+    <tr><td>ArrayDeque</td><td>O(1)</td><td>O(n)</td><td>O(1) at the ends</td></tr>
+  </table>
+  <p>* amortised — occasionally the backing array is resized and copied.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Count word frequency in a paragraph with a <code>HashMap</code>, then print the top five by count.</li>
+      <li>Given two lists, produce their intersection, union and difference using sets.</li>
+      <li>Group a list of <code>Person</code> by city into a <code>Map&lt;String, List&lt;Person&gt;&gt;</code> with
+          <code>computeIfAbsent</code>.</li>
+      <li>Build a simple phone book: add, look up, delete, and list entries sorted by name.</li>
+      <li>Reproduce <code>ConcurrentModificationException</code>, then fix it two different ways.</li>
+      <li>Put a mutable object in a <code>HashSet</code>, change a field used by <code>hashCode</code>, then try to find
+          it again. Explain the result.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

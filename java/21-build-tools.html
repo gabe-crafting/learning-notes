@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maven, Gradle and packaging — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="21-build-tools.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Maven, Gradle and packaging</h1>
+  <p class="lead">How a Java project declares its dependencies, gets compiled the same way on every machine, and turns
+     into something you can actually run.</p>
+
+  <h2>What a build tool does</h2>
+  <ul>
+    <li>Downloads dependencies (and their dependencies) from a repository.</li>
+    <li>Compiles source into <code>target/classes</code> with the right classpath.</li>
+    <li>Runs tests and fails the build when they fail.</li>
+    <li>Packages a jar, with a reproducible result on any machine or CI server.</li>
+  </ul>
+  <p>Maven is the most common in enterprise Java and is what Spring Initializr defaults to. Gradle is common in newer
+     projects and Android. Learn Maven first; Gradle's concepts map onto it.</p>
+
+  <h2>pom.xml</h2>
+  <pre><code>&lt;project xmlns="http://maven.apache.org/POM/4.0.0"&gt;
+    &lt;modelVersion&gt;4.0.0&lt;/modelVersion&gt;
+
+    &lt;groupId&gt;com.example&lt;/groupId&gt;        &lt;!-- your organisation --&gt;
+    &lt;artifactId&gt;shop-api&lt;/artifactId&gt;     &lt;!-- the project name --&gt;
+    &lt;version&gt;1.0.0-SNAPSHOT&lt;/version&gt;     &lt;!-- SNAPSHOT = still in development --&gt;
+    &lt;packaging&gt;jar&lt;/packaging&gt;
+
+    &lt;properties&gt;
+        &lt;maven.compiler.release&gt;21&lt;/maven.compiler.release&gt;
+        &lt;project.build.sourceEncoding&gt;UTF-8&lt;/project.build.sourceEncoding&gt;
+    &lt;/properties&gt;
+
+    &lt;dependencies&gt;
+        &lt;dependency&gt;
+            &lt;groupId&gt;com.fasterxml.jackson.core&lt;/groupId&gt;
+            &lt;artifactId&gt;jackson-databind&lt;/artifactId&gt;
+            &lt;version&gt;2.17.1&lt;/version&gt;
+        &lt;/dependency&gt;
+        &lt;dependency&gt;
+            &lt;groupId&gt;org.junit.jupiter&lt;/groupId&gt;
+            &lt;artifactId&gt;junit-jupiter&lt;/artifactId&gt;
+            &lt;version&gt;5.10.2&lt;/version&gt;
+            &lt;scope&gt;test&lt;/scope&gt;
+        &lt;/dependency&gt;
+    &lt;/dependencies&gt;
+&lt;/project&gt;</code></pre>
+  <p>Those three coordinates — <strong>groupId : artifactId : version</strong> — identify every Java library in
+     existence. Search them on <a href="https://central.sonatype.com">Maven Central</a>.</p>
+
+  <h3>Scopes</h3>
+  <table>
+    <tr><td><code>compile</code> (default)</td><td>Needed everywhere, packaged into the artifact</td></tr>
+    <tr><td><code>provided</code></td><td>Needed to compile, supplied at runtime by the container</td></tr>
+    <tr><td><code>runtime</code></td><td>Not needed to compile — JDBC drivers, for example</td></tr>
+    <tr><td><code>test</code></td><td>Only for tests; never shipped</td></tr>
+  </table>
+
+  <h2>The lifecycle</h2>
+  <pre><code>mvn clean          # delete target/
+mvn compile        # compile main sources
+mvn test           # compile and run tests
+mvn package        # build the jar (runs test first)
+mvn verify         # run integration tests and checks
+mvn install        # copy the artifact into your local ~/.m2 repository
+
+mvn clean package                 # the command you will type most often
+mvn test -Dtest=OrderServiceTest  # a single test class
+mvn package -DskipTests           # skip tests (compiles them); -Dmaven.test.skip skips compiling too
+mvn dependency:tree               # show the full dependency graph
+mvn versions:display-dependency-updates</code></pre>
+  <p>Phases run in order: asking for <code>package</code> runs everything before it. Dependencies are cached in
+     <code>~/.m2/repository</code>; the first build downloads a lot, later ones are fast.</p>
+
+  <h2>Transitive dependencies and conflicts</h2>
+  <p>Your dependencies bring their own. When two versions of the same library appear, Maven picks the one nearest the
+     root of the tree — which is sometimes not the one you want.</p>
+  <pre><code>mvn dependency:tree -Dincludes=com.google.guava</code></pre>
+  <pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;com.example&lt;/groupId&gt;
+    &lt;artifactId&gt;some-lib&lt;/artifactId&gt;
+    &lt;version&gt;1.0&lt;/version&gt;
+    &lt;exclusions&gt;
+        &lt;exclusion&gt;
+            &lt;groupId&gt;commons-logging&lt;/groupId&gt;
+            &lt;artifactId&gt;commons-logging&lt;/artifactId&gt;
+        &lt;/exclusion&gt;
+    &lt;/exclusions&gt;
+&lt;/dependency&gt;</code></pre>
+  <p><code>NoSuchMethodError</code> at runtime almost always means two versions of a library are on the classpath. The
+     dependency tree is where you look.</p>
+
+  <h3>dependencyManagement and parents</h3>
+  <pre><code>&lt;dependencyManagement&gt;
+    &lt;dependencies&gt;
+        &lt;dependency&gt;                        &lt;!-- version declared once, inherited by modules --&gt;
+            &lt;groupId&gt;org.junit&lt;/groupId&gt;
+            &lt;artifactId&gt;junit-bom&lt;/artifactId&gt;
+            &lt;version&gt;5.10.2&lt;/version&gt;
+            &lt;type&gt;pom&lt;/type&gt;
+            &lt;scope&gt;import&lt;/scope&gt;
+        &lt;/dependency&gt;
+    &lt;/dependencies&gt;
+&lt;/dependencyManagement&gt;</code></pre>
+  <p>This is exactly what <code>spring-boot-starter-parent</code> does for you in the next course: it pins consistent
+     versions for hundreds of libraries so you can omit <code>&lt;version&gt;</code> entirely.</p>
+
+  <h2>Building a runnable jar</h2>
+  <p>A plain <code>mvn package</code> jar contains only your classes — running it fails as soon as it needs a
+     dependency. Two solutions:</p>
+  <pre><code>&lt;!-- 1. Shade plugin: bundle everything into one "fat jar" --&gt;
+&lt;plugin&gt;
+    &lt;groupId&gt;org.apache.maven.plugins&lt;/groupId&gt;
+    &lt;artifactId&gt;maven-shade-plugin&lt;/artifactId&gt;
+    &lt;version&gt;3.5.3&lt;/version&gt;
+    &lt;executions&gt;
+        &lt;execution&gt;
+            &lt;phase&gt;package&lt;/phase&gt;
+            &lt;goals&gt;&lt;goal&gt;shade&lt;/goal&gt;&lt;/goals&gt;
+            &lt;configuration&gt;
+                &lt;transformers&gt;
+                    &lt;transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"&gt;
+                        &lt;mainClass&gt;com.example.Main&lt;/mainClass&gt;
+                    &lt;/transformer&gt;
+                &lt;/transformers&gt;
+            &lt;/configuration&gt;
+        &lt;/execution&gt;
+    &lt;/executions&gt;
+&lt;/plugin&gt;</code></pre>
+  <pre><code>java -jar target/shop-api-1.0.0-SNAPSHOT.jar</code></pre>
+  <p>2. In Spring Boot you get this for free — <code>spring-boot-maven-plugin</code> builds an executable jar with an
+     embedded web server.</p>
+
+  <h2>Gradle, for orientation</h2>
+  <pre><code>plugins {
+    id 'java'
+}
+
+group = 'com.example'
+version = '1.0.0-SNAPSHOT'
+
+java {
+    toolchain { languageVersion = JavaLanguageVersion.of(21) }
+}
+
+repositories { mavenCentral() }
+
+dependencies {
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.1'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+}
+
+test { useJUnitPlatform() }</code></pre>
+  <pre><code>./gradlew build       # always use the wrapper, not a locally installed gradle
+./gradlew test
+./gradlew bootRun</code></pre>
+  <p>Same ideas, terser syntax, faster incremental builds, and a build script that is real code — which is both its
+     strength and its risk.</p>
+
+  <h2>The wrapper</h2>
+  <pre><code>./mvnw clean package        # Linux / macOS
+mvnw.cmd clean package      # Windows</code></pre>
+  <p>The wrapper scripts and their <code>.mvn/</code> folder are committed to git so that everyone — including the CI
+     server — builds with the same tool version. Use them when a project provides them.</p>
+
+  <h2>Semantic versioning</h2>
+  <pre><code>MAJOR.MINOR.PATCH        e.g. 2.7.3
+MAJOR — incompatible API changes
+MINOR — new features, backwards compatible
+PATCH — bug fixes
+-SNAPSHOT — a moving development version, re-downloaded regularly</code></pre>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Create a Maven project from scratch by writing <code>pom.xml</code> by hand — no IDE wizard — and compile
+          it.</li>
+      <li>Add Jackson and JUnit, write one class that serialises an object and one test for it, and run
+          <code>mvn clean package</code>.</li>
+      <li>Run <code>mvn dependency:tree</code> and identify one transitive dependency you never asked for.</li>
+      <li>Configure the shade plugin and run your app with <code>java -jar</code>.</li>
+      <li>Break the build on purpose by making a test fail, and confirm that <code>mvn package</code> refuses to produce
+          a jar.</li>
+      <li>Convert the same project to Gradle and compare the two build files.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

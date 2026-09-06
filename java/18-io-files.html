@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Files, I/O and JSON — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="18-io-files.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Files, I/O and JSON</h1>
+  <p class="lead">Reading and writing the outside world: files, streams, resources on the classpath, and the JSON your
+     services will speak.</p>
+
+  <h2>Path and Files</h2>
+  <p>Use <code>java.nio.file</code> (Java 7+). The old <code>java.io.File</code> still appears in legacy code but has a
+     worse API and poor error reporting.</p>
+  <pre><code>Path path = Path.of("data", "orders.csv");        // OS-independent separator
+Path abs = path.toAbsolutePath();
+path.getFileName();   path.getParent();   path.resolve("sub.txt");
+
+Files.exists(path);          Files.isDirectory(path);      Files.size(path);
+Files.createDirectories(Path.of("out/reports"));
+Files.copy(src, dest, StandardCopyOption.REPLACE_EXISTING);
+Files.move(src, dest);
+Files.delete(path);                  // throws if missing
+Files.deleteIfExists(path);</code></pre>
+
+  <h2>Reading text</h2>
+  <pre><code>// whole file into a String — fine for small files
+String content = Files.readString(path, StandardCharsets.UTF_8);
+
+// all lines into a List
+List&lt;String&gt; lines = Files.readAllLines(path, StandardCharsets.UTF_8);
+
+// line by line, lazily — the right choice for large files
+try (Stream&lt;String&gt; stream = Files.lines(path, StandardCharsets.UTF_8)) {
+    stream.filter(line -&gt; !line.isBlank())
+          .map(String::strip)
+          .forEach(System.out::println);
+}
+
+// classic buffered reader
+try (BufferedReader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+    String line;
+    while ((line = reader.readLine()) != null) {
+        process(line);
+    }
+}</code></pre>
+  <div class="warn">
+    <strong>Always name the charset</strong>
+    Without it you inherit the platform default, so the same code produces different results on your laptop and on the
+    Linux server. <code>StandardCharsets.UTF_8</code>, every time.
+  </div>
+
+  <h2>Writing text</h2>
+  <pre><code>Files.writeString(path, "hello", StandardCharsets.UTF_8);
+Files.write(path, lines, StandardCharsets.UTF_8);
+
+// append instead of overwrite
+Files.writeString(path, "more\n", StandardCharsets.UTF_8,
+                  StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+
+try (BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
+    writer.write("first line");
+    writer.newLine();
+    writer.write("second line");
+}</code></pre>
+
+  <h2>Binary data</h2>
+  <pre><code>byte[] bytes = Files.readAllBytes(path);
+Files.write(path, bytes);
+
+try (InputStream in = Files.newInputStream(src);
+     OutputStream out = Files.newOutputStream(dest)) {
+    in.transferTo(out);              // Java 9+
+}</code></pre>
+
+  <h2>The stream class hierarchy, briefly</h2>
+  <table>
+    <tr><th></th><th>Bytes</th><th>Characters</th></tr>
+    <tr><td>Read</td><td><code>InputStream</code></td><td><code>Reader</code></td></tr>
+    <tr><td>Write</td><td><code>OutputStream</code></td><td><code>Writer</code></td></tr>
+  </table>
+  <p>They wrap each other — a decorator design. <code>BufferedReader</code> around an
+     <code>InputStreamReader</code> around a <code>FileInputStream</code>. Buffering matters: unbuffered
+     character-by-character reads are orders of magnitude slower.</p>
+
+  <h2>try-with-resources, again</h2>
+  <pre><code>try (var reader = Files.newBufferedReader(path)) {
+    ...
+} catch (NoSuchFileException e) {
+    log.warn("Missing file {}", path);
+} catch (IOException e) {
+    throw new UncheckedIOException(e);
+}</code></pre>
+  <p>Any <code>AutoCloseable</code> declared in the parentheses is closed automatically, in reverse order, even when an
+     exception is thrown. Never leave a stream unclosed — open file handles leak and eventually the process runs out.</p>
+
+  <h2>Reading a resource from the classpath</h2>
+  <p>Files inside <code>src/main/resources</code> are packaged into the jar, so they cannot be read with a file path at
+     runtime. Load them as a resource stream instead:</p>
+  <pre><code>try (InputStream in = getClass().getResourceAsStream("/config.properties")) {
+    Properties props = new Properties();
+    props.load(in);
+    String url = props.getProperty("db.url");
+}
+
+String text;
+try (var in = MyClass.class.getResourceAsStream("/data/seed.json")) {
+    text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+}</code></pre>
+
+  <h2>Walking directories</h2>
+  <pre><code>try (Stream&lt;Path&gt; paths = Files.walk(Path.of("src"))) {
+    paths.filter(Files::isRegularFile)
+         .filter(p -&gt; p.toString().endsWith(".java"))
+         .forEach(System.out::println);
+}
+
+try (Stream&lt;Path&gt; list = Files.list(dir)) { ... }        // one level only</code></pre>
+
+  <h2>A small CSV example</h2>
+  <pre><code>record Order(String id, String customer, BigDecimal total) { }
+
+List&lt;Order&gt; readOrders(Path csv) throws IOException {
+    try (Stream&lt;String&gt; lines = Files.lines(csv, StandardCharsets.UTF_8)) {
+        return lines.skip(1)                          // header
+                    .filter(line -&gt; !line.isBlank())
+                    .map(line -&gt; line.split(","))
+                    .map(f -&gt; new Order(f[0].strip(), f[1].strip(), new BigDecimal(f[2].strip())))
+                    .toList();
+    }
+}</code></pre>
+  <p>Splitting on commas breaks the moment a field contains a comma or a quote. For anything beyond a toy, use a
+     library — OpenCSV or Apache Commons CSV.</p>
+
+  <h2>JSON with Jackson</h2>
+  <p>Jackson is the de-facto standard and is what Spring Boot uses under the hood, so learning it now pays off in the
+     next course.</p>
+  <pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;com.fasterxml.jackson.core&lt;/groupId&gt;
+    &lt;artifactId&gt;jackson-databind&lt;/artifactId&gt;
+    &lt;version&gt;2.17.1&lt;/version&gt;
+&lt;/dependency&gt;</code></pre>
+  <pre><code>record Product(String name, BigDecimal price, boolean available) { }
+
+ObjectMapper mapper = new ObjectMapper();           // create once, reuse — it is thread-safe
+
+// object → JSON
+String json = mapper.writeValueAsString(product);
+mapper.writerWithDefaultPrettyPrinter().writeValueAsString(product);
+mapper.writeValue(Path.of("product.json").toFile(), product);
+
+// JSON → object
+Product p = mapper.readValue(json, Product.class);
+List&lt;Product&gt; list = mapper.readValue(json, new TypeReference&lt;List&lt;Product&gt;&gt;() {});
+
+// unknown fields
+mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+// java.time support
+mapper.registerModule(new JavaTimeModule());</code></pre>
+  <pre><code>public record Customer(
+        @JsonProperty("customer_id") String id,      // different name in JSON
+        String name,
+        @JsonIgnore String internalNote) { }</code></pre>
+
+  <h2>Console input and output</h2>
+  <pre><code>System.out.println("normal output");
+System.err.println("errors go here");            // separate stream, often shown in red
+
+Scanner scanner = new Scanner(System.in);
+String line = scanner.nextLine();
+
+// arguments
+public static void main(String[] args) {
+    if (args.length &lt; 1) {
+        System.err.println("Usage: app &lt;file&gt;");
+        System.exit(1);                           // non-zero = failure
+    }
+}</code></pre>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Write a program that counts lines, words and characters in a file given as an argument.</li>
+      <li>Read a CSV of products, filter those under a given price, and write the result to a new CSV.</li>
+      <li>Load a <code>.properties</code> file from <code>src/main/resources</code> and print every key and value.</li>
+      <li>Serialise a list of records to pretty JSON with Jackson, write it to disk, read it back and confirm the
+          objects are equal.</li>
+      <li>Walk a directory tree and report the ten largest files.</li>
+      <li>Deliberately forget try-with-resources, then use it — and explain what could go wrong in a long-running
+          server without it.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

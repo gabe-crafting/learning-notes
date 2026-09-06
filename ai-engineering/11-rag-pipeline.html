@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Building a RAG pipeline — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="11-rag-pipeline.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Building a RAG pipeline</h1>
+  <p class="lead">Retrieval-augmented generation: search your data, put the results in the prompt, answer from them, and
+     cite the sources. The most requested feature in the industry, and the one most often built badly.</p>
+
+  <h2>Why RAG rather than a bigger model or fine-tuning</h2>
+  <table>
+    <tr><th></th><th>RAG</th><th>Fine-tuning</th><th>Long context (paste everything)</th></tr>
+    <tr><td>Teaches facts</td><td>Yes, at query time</td><td>Unreliably</td><td>Yes</td></tr>
+    <tr><td>Updates</td><td>Re-index a document, seconds</td><td>Retrain</td><td>Free</td></tr>
+    <tr><td>Cost per query</td><td>Low — only relevant chunks</td><td>Low</td><td>High — you pay for everything, every
+        time</td></tr>
+    <tr><td>Citations</td><td>Natural</td><td>No</td><td>Possible but weak</td></tr>
+    <tr><td>Access control</td><td>Filter at retrieval</td><td>Impossible</td><td>Impossible</td></tr>
+    <tr><td>Scale of corpus</td><td>Unbounded</td><td>—</td><td>Context window</td></tr>
+  </table>
+  <p>Fine-tuning teaches <em>behaviour</em> and format; retrieval supplies <em>knowledge</em>. When someone says "we
+     fine-tuned it on our documentation and it still gets facts wrong", this is why (lesson 19).</p>
+
+  <h2>The pipeline</h2>
+  <pre><code>question
+   → (optional) rewrite / expand the query
+   → retrieve top-k chunks   (vector + keyword, filtered by permissions)
+   → (optional) rerank
+   → assemble prompt with numbered sources
+   → generate answer with citations
+   → validate citations, return answer + sources</code></pre>
+
+  <h2>A complete implementation</h2>
+  <pre><code>from dataclasses import dataclass
+import anthropic
+
+client = anthropic.Anthropic()
+
+@dataclass
+class Source:
+    id: int                 # 1-based index shown to the model
+    chunk_id: str
+    title: str
+    url: str | None
+    page: int | None
+    text: str
+
+
+def retrieve(question: str, tenant: str, k: int = 8) -> list[Source]:
+    vector = embed_query(question)
+    rows = store.search(vector, tenant=tenant, k=k)      # lesson 9
+    return [
+        Source(i, r.chunk_id, r.title, r.url, r.page, r.content)
+        for i, r in enumerate(rows, start=1)
+    ]
+
+
+def format_sources(sources: list[Source]) -> str:
+    return "\n\n".join(
+        f'&lt;source id="{s.id}" title="{s.title}" page="{s.page}"&gt;\n{s.text}\n&lt;/source&gt;'
+        for s in sources
+    )
+
+
+SYSTEM = """You answer questions using only the sources provided.
+
+Rules:
+- Use only information from the sources. Do not use prior knowledge.
+- Cite every factual claim with the source id in square brackets, like [2].
+  A sentence may cite several sources: [1][3].
+- If the sources do not contain the answer, reply exactly:
+  "I could not find this in the available documents."
+  Do not guess, and do not offer general advice instead.
+- If sources disagree, say so and cite both.
+- Answer in the language of the question. Be concise: at most 150 words unless
+  the question requires a list.
+"""
+
+
+def answer(question: str, tenant: str) -> dict:
+    sources = retrieve(question, tenant)
+    if not sources:
+        return {"answer": "I could not find this in the available documents.", "sources": []}
+
+    response = client.messages.create(
+        model="claude-opus-5",
+        max_tokens=2000,
+        system=SYSTEM,
+        messages=[{
+            "role": "user",
+            "content": (
+                f"&lt;sources&gt;\n{format_sources(sources)}\n&lt;/sources&gt;\n\n"
+                f"&lt;question&gt;\n{question}\n&lt;/question&gt;"
+            ),
+        }],
+    )
+
+    text = "".join(b.text for b in response.content if b.type == "text")
+    cited = extract_citation_ids(text)                     # e.g. {1, 3}
+    used = [s for s in sources if s.id in cited]
+
+    return {
+        "answer": text,
+        "sources": [
+            {"id": s.id, "title": s.title, "url": s.url, "page": s.page} for s in used
+        ],
+        "usage": {"input": response.usage.input_tokens, "output": response.usage.output_tokens},
+    }</code></pre>
+  <pre><code>import re
+
+def extract_citation_ids(text: str) -> set[int]:
+    return {int(n) for n in re.findall(r"\[(\d+)\]", text)}</code></pre>
+
+  <h2>Citations are the product</h2>
+  <p>Without citations, a RAG answer is an unverifiable claim, and users are right not to trust it. With them, a user
+     can check in two seconds — and your support team can debug a bad answer by looking at what was retrieved.</p>
+  <pre><code>def validate_citations(text: str, sources: list[Source]) -&gt; list[str]:
+    problems = []
+    valid_ids = {s.id for s in sources}
+    cited = extract_citation_ids(text)
+
+    for bad in cited - valid_ids:
+        problems.append(f"cites non-existent source [{bad}]")     # hallucinated citation
+
+    sentences = [s for s in re.split(r"(?&lt;=[.!?])\s+", text) if len(s) &gt; 40]
+    uncited = [s for s in sentences if not re.search(r"\[\d+\]", s)]
+    if len(uncited) &gt; len(sentences) / 2:
+        problems.append("most claims are uncited")
+    return problems</code></pre>
+  <p>A stricter check, worth it in high-stakes domains: for each cited sentence, verify with a cheap model call that the
+     cited chunk actually supports it. That is a small "faithfulness" evaluator, and lesson 16 turns it into a metric
+     you track.</p>
+
+  <h2>The failure modes, and where they come from</h2>
+  <table>
+    <tr><th>Symptom</th><th>Where the bug is</th></tr>
+    <tr><td>"I could not find this" for something clearly in the docs</td><td>Retrieval: bad chunking, wrong embedding
+        model, missing hybrid search, or an over-restrictive filter</td></tr>
+    <tr><td>Answer is right but incomplete</td><td>k too small, or the answer spans chunks that were split badly</td></tr>
+    <tr><td>Answer contains facts not in the sources</td><td>Prompt not strict enough, or the model is falling back on
+        training knowledge — tighten the instruction and check faithfulness</td></tr>
+    <tr><td>Citations point at the wrong source</td><td>Source ids not stable between formatting and validation</td></tr>
+    <tr><td>Confidently wrong from an outdated document</td><td>Ingestion: deletions and updates are not reaching the
+        index</td></tr>
+    <tr><td>Slow</td><td>Too many chunks, reranking every query, no caching</td></tr>
+    <tr><td>Expensive</td><td>k too large; long chunks; resending the whole context on every conversational turn</td></tr>
+  </table>
+  <div class="note">
+    <strong>Debug retrieval before you touch the prompt</strong>
+    When an answer is wrong, first print the retrieved chunks. If the answer is not in them, the generation prompt is
+    irrelevant — you have a retrieval problem, and lesson 12 is the fix. Most teams waste days tuning prompts to
+    compensate for retrieval they never inspected.
+  </div>
+
+  <h2>Conversational RAG</h2>
+  <p>Follow-up questions break naive retrieval, because "and what about for contractors?" embeds to nothing useful.
+     Rewrite the question into a standalone one before retrieving:</p>
+  <pre><code>REWRITE = """Given the conversation and a follow-up question, rewrite the follow-up
+as a standalone question that makes sense without the conversation.
+Return only the rewritten question."""
+
+def standalone_question(history: list[dict], question: str) -> str:
+    if not history:
+        return question
+    transcript = "\n".join(f"{m['role']}: {m['content']}" for m in history[-6:])
+    return cheap_model(f"{REWRITE}\n\n&lt;conversation&gt;\n{transcript}\n&lt;/conversation&gt;\n\n"
+                       f"&lt;follow_up&gt;{question}&lt;/follow_up&gt;")</code></pre>
+  <p>Then retrieve with the rewritten question, but answer with the full conversation in context. Also decide whether a
+     turn needs retrieval at all — "thanks!" and "make that shorter" do not, and a cheap classifier in front saves both
+     latency and money.</p>
+
+  <h2>Cost and latency shape</h2>
+  <pre><code>per question:
+  1 embedding call         ~5 ms,   negligible cost
+  1 vector query           ~10 ms
+  (optional) rerank        ~100-300 ms
+  1 generation call        1-5 s,   dominated by output tokens
+                           input ≈ system + k chunks (k=8 × 700 tokens ≈ 5,600)</code></pre>
+  <p>Levers, in the order to reach for them: cache the system prompt; keep k as small as quality allows; use a cheaper
+     model for rewriting and routing; stream the answer so perceived latency drops; and cache answers for repeated
+     questions (semantic caching, lesson 17).</p>
+
+  <h2>Beyond the basic loop</h2>
+  <ul>
+    <li><strong>Retrieve small, present large.</strong> Embed small precise chunks, but send the model the surrounding
+        section — index the sentence, return the paragraph.</li>
+    <li><strong>Parent-document retrieval</strong> is the same idea formalised: children for matching, parents for
+        context.</li>
+    <li><strong>Metadata pre-filtering</strong> beats post-filtering: apply date, type and permission filters inside the
+        query.</li>
+    <li><strong>Multi-index routing</strong> — separate indexes for product docs, contracts and tickets, with a cheap
+        classifier picking which to search.</li>
+    <li><strong>Agentic RAG</strong> — give the model a <code>search</code> tool instead of a fixed pipeline, so it can
+        search several times and refine. More powerful, more expensive, harder to evaluate. Start fixed, move to
+        agentic only when you have measured the fixed version failing (lesson 13).</li>
+  </ul>
+
+  <h2>Permissions</h2>
+  <div class="warn">
+    <strong>Retrieval is an access-control surface</strong>
+    Whatever a user can retrieve, they can read — the model will happily quote it. Filter by the user's permissions
+    inside the retrieval query, using the identity from your auth layer, never a value the client sent. Test it: log in
+    as a low-privilege user and try to extract a document you should not see.
+  </div>
+
+  <h2>Showing it in the UI</h2>
+  <ul>
+    <li>Stream the answer.</li>
+    <li>Render citations as links to the source, ideally deep-linked to the page or section.</li>
+    <li>Show the sources that were used, and make them expandable to the actual chunk.</li>
+    <li>Say clearly when nothing was found rather than filling the space.</li>
+    <li>Offer thumbs up/down and store it with the question and the retrieved ids — that is your future eval set,
+        collected for free.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Build the full pipeline over 20–50 real documents you care about: ingest, embed, store, retrieve, answer with
+          citations.</li>
+      <li>Write 20 questions you know the answers to, run them all, and score each answer yourself as correct /
+          incomplete / wrong. This is your first eval set.</li>
+      <li>For every wrong answer, print the retrieved chunks and classify the failure as retrieval or generation. Count
+          each.</li>
+      <li>Implement citation validation and catch at least one hallucinated citation.</li>
+      <li>Add question rewriting and test a three-turn conversation with pronouns and ellipsis.</li>
+      <li>Ask a question the documents genuinely do not answer, and confirm you get the refusal rather than
+          invention.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

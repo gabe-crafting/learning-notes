@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vector stores — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="09-vector-stores.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Vector stores</h1>
+  <p class="lead">Where the vectors live, how nearest-neighbour search works at scale, and why the answer is often
+     "just use Postgres".</p>
+
+  <h2>What a vector database gives you</h2>
+  <ul>
+    <li><strong>Approximate nearest-neighbour search</strong> — top-k similar vectors in milliseconds over millions of
+        rows, without comparing against every one.</li>
+    <li><strong>Metadata filters</strong> — "only documents this user may see, only from 2026, only type=contract".</li>
+    <li><strong>Persistence and updates</strong> — insert, update and delete without rebuilding everything.</li>
+    <li><strong>Operational basics</strong> — backups, replication, scaling.</li>
+  </ul>
+  <p>Exact search compares your query against every vector: correct, and fine up to roughly tens of thousands of items.
+     Beyond that you use an index that trades a small amount of recall for a very large amount of speed.</p>
+
+  <h2>Indexes, briefly</h2>
+  <table>
+    <tr><td><strong>Flat / brute force</strong></td><td>Compare everything. Perfect recall, linear cost. Correct choice
+        for small collections.</td></tr>
+    <tr><td><strong>HNSW</strong></td><td>A navigable graph. The default in most engines: excellent recall/speed,
+        higher memory, fast queries. Tunables: <code>m</code>, <code>ef_construction</code> (build), <code>ef_search</code>
+        (query — higher means better recall, slower).</td></tr>
+    <tr><td><strong>IVF / IVFFlat</strong></td><td>Cluster the space, search only the nearest clusters. Cheaper to
+        build, needs training data, tuned with <code>lists</code> and <code>probes</code>.</td></tr>
+    <tr><td><strong>Quantisation (PQ, int8, binary)</strong></td><td>Compress vectors to cut memory, at some accuracy
+        cost. Often combined with the above.</td></tr>
+  </table>
+  <p>You do not need to implement these. You do need to know that <strong>approximate means approximate</strong>: if
+     your retrieval is mysteriously missing an obviously relevant chunk, an aggressive index setting is one candidate
+     explanation — test against a flat index to rule it in or out.</p>
+
+  <h2>The options</h2>
+  <table>
+    <tr><th>Store</th><th>Shape</th><th>Good when</th></tr>
+    <tr><td><strong>pgvector</strong> (Postgres extension)</td><td>Your existing database</td><td>You already run
+        Postgres. One system, real transactions, joins against your business tables, familiar operations. The default
+        recommendation for most products.</td></tr>
+    <tr><td><strong>Chroma</strong></td><td>Embedded / local</td><td>Prototypes and notebooks. Zero setup, in-process,
+        easy to throw away.</td></tr>
+    <tr><td><strong>Qdrant</strong></td><td>Dedicated, self-host or cloud</td><td>Serious vector workloads with rich
+        filtering. Strong defaults, good hybrid support.</td></tr>
+    <tr><td><strong>Weaviate</strong></td><td>Dedicated, self-host or cloud</td><td>Built-in hybrid search and
+        modules.</td></tr>
+    <tr><td><strong>Pinecone</strong></td><td>Managed only</td><td>You want no operations at all and accept vendor
+        lock-in and per-usage pricing.</td></tr>
+    <tr><td><strong>FAISS</strong></td><td>Library, not a database</td><td>In-process similarity at scale, when you
+        handle persistence and metadata yourself.</td></tr>
+    <tr><td><strong>Elasticsearch / OpenSearch</strong></td><td>Search engine with vectors</td><td>You already run it
+        and want keyword plus vector in one place.</td></tr>
+  </table>
+  <div class="note">
+    <strong>Start with pgvector unless you have a reason not to</strong>
+    A separate vector database is another service to deploy, secure, back up and keep in sync with your source of
+    truth — and keeping two stores consistent is a real, recurring source of bugs. Postgres with pgvector comfortably
+    handles millions of vectors, and you get filtering, joins and transactions for free. Move to a dedicated engine when
+    you have measured a reason.
+  </div>
+
+  <h2>pgvector, concretely</h2>
+  <pre><code>create extension if not exists vector;
+
+create table documents (
+    id          bigserial primary key,
+    source      text        not null,
+    title       text,
+    created_at  timestamptz not null default now()
+);
+
+create table chunks (
+    id           bigserial primary key,
+    document_id  bigint      not null references documents (id) on delete cascade,
+    ordinal      int         not null,
+    content      text        not null,
+    token_count  int         not null,
+    metadata     jsonb       not null default '{}',
+    embedding    vector(1024) not null,          -- must match your model's dimension
+    created_at   timestamptz not null default now()
+);
+
+create index on chunks using hnsw (embedding vector_cosine_ops);
+create index on chunks (document_id);
+create index on chunks using gin (metadata jsonb_path_ops);</code></pre>
+  <pre><code>-- top 5 most similar chunks, filtered by tenant and recency
+select c.id, c.content, d.title, d.source,
+       1 - (c.embedding &lt;=&gt; $1) as similarity     -- &lt;=&gt; is cosine distance
+from chunks c
+join documents d on d.id = c.document_id
+where c.metadata @&gt; '{"tenant": "acme"}'
+  and d.created_at &gt; now() - interval '2 years'
+order by c.embedding &lt;=&gt; $1                        -- distance ascending = most similar first
+limit 5;</code></pre>
+  <p>Operators: <code>&lt;=&gt;</code> cosine distance, <code>&lt;-&gt;</code> L2, <code>&lt;#&gt;</code> negative inner
+     product. Use the one matching how your vectors were normalised, and make sure the index operator class matches the
+     operator in your query — a mismatch silently falls back to a sequential scan.</p>
+
+  <pre><code>import psycopg
+from pgvector.psycopg import register_vector
+
+conn = psycopg.connect(DSN)
+register_vector(conn)
+
+def search(query_vector, tenant: str, k: int = 5):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select c.id, c.content, d.title, d.source,
+                   1 - (c.embedding &lt;=&gt; %s) as similarity
+            from chunks c join documents d on d.id = c.document_id
+            where c.metadata @&gt; %s
+            order by c.embedding &lt;=&gt; %s
+            limit %s
+            """,
+            (query_vector, json.dumps({"tenant": tenant}), query_vector, k),
+        )
+        return cur.fetchall()</code></pre>
+
+  <h2>Chroma, for a five-minute prototype</h2>
+  <pre><code>import chromadb
+
+client = chromadb.PersistentClient(path="./chroma")
+collection = client.get_or_create_collection("docs", metadata={"hnsw:space": "cosine"})
+
+collection.add(
+    ids=[c.id for c in chunks],
+    documents=[c.text for c in chunks],
+    embeddings=[c.vector for c in chunks],
+    metadatas=[{"source": c.source, "page": c.page} for c in chunks],
+)
+
+result = collection.query(
+    query_embeddings=[query_vector],
+    n_results=5,
+    where={"source": "handbook.pdf"},
+)</code></pre>
+  <p>Perfect for learning and for tests. Do not build a multi-tenant production system on it without understanding its
+     operational limits.</p>
+
+  <h2>Metadata is not optional</h2>
+  <p>Store enough alongside each vector to filter, cite and debug:</p>
+  <pre><code>{
+  "chunk_id": "doc42:7",
+  "document_id": "doc42",
+  "source": "employee-handbook-2026.pdf",
+  "title": "Employee Handbook 2026",
+  "url": "https://intranet/handbook.pdf#page=14",
+  "page": 14,
+  "section": "Leave policy",
+  "tenant": "acme",
+  "acl": ["hr", "all-staff"],
+  "language": "en",
+  "updated_at": "2026-03-02",
+  "embedding_model": "bge-m3",
+  "content_hash": "9f2a..."
+}</code></pre>
+  <ul>
+    <li><strong>ACL fields decide what a user may retrieve.</strong> Filter on them in the query, never after — "fetch
+        then filter" leaks data and returns fewer results than requested.</li>
+    <li><strong>Source, page and URL are what make citations possible</strong> (lesson 11).</li>
+    <li><strong>Content hash</strong> lets you skip re-embedding unchanged chunks.</li>
+    <li><strong>Embedding model</strong> lets you migrate models without guessing which rows are stale.</li>
+  </ul>
+  <div class="warn">
+    <strong>Multi-tenancy is a security boundary</strong>
+    A missing tenant filter shows one customer another customer's documents. Put the filter in a single shared query
+    function, never in each call site, and write a test that asserts a query for tenant A returns nothing belonging to
+    tenant B.
+  </div>
+
+  <h2>Keeping the index in sync</h2>
+  <pre><code>for document in source_documents:
+    stored = db.get_document(document.id)
+    if stored and stored.content_hash == document.content_hash:
+        continue                                   # unchanged, skip
+
+    db.delete_chunks(document_id=document.id)      # replace atomically
+    chunks = chunk(document)
+    vectors = embed([c.text for c in chunks])
+    db.insert_chunks(document.id, chunks, vectors)
+    db.upsert_document(document)</code></pre>
+  <p>Decide up front how updates and deletions reach the index. A knowledge base that answers from a deleted document,
+     or from last quarter's price list, destroys trust faster than a wrong-but-honest "I do not know".</p>
+
+  <h2>Performance notes</h2>
+  <ul>
+    <li>Insert in batches inside a transaction; commit per document, not per chunk.</li>
+    <li>Build the index <em>after</em> a large bulk load, not before.</li>
+    <li>Tune recall explicitly — in pgvector, <code>set hnsw.ef_search = 100;</code> raises recall at some latency
+        cost.</li>
+    <li>Measure with <code>explain analyze</code>: if you see a sequential scan, your index is not being used.</li>
+    <li>Vectors are large. Do not <code>select *</code> when you only need ids, content and score.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Run Postgres with pgvector in Docker, create the schema above, and insert 1,000 chunks.</li>
+      <li>Query for the top 5 with and without an HNSW index, and compare timings with <code>explain analyze</code>.</li>
+      <li>Add a tenant field, insert two tenants, and write a test proving one cannot retrieve the other's data.</li>
+      <li>Build the same collection in Chroma and compare the developer experience.</li>
+      <li>Implement content-hash-based incremental re-indexing and confirm unchanged documents are skipped.</li>
+      <li>Delete a document and verify it disappears from search results immediately.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

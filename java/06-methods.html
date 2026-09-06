@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Methods — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="06-methods.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Methods</h1>
+  <p class="lead">Named, reusable blocks of behaviour. Everything you write in Java lives inside one.</p>
+
+  <h2>Anatomy</h2>
+  <pre><code>public static int add(int a, int b) {
+    return a + b;
+}
+//  │      │     │    │     └──── parameters
+//  │      │     │    └────────── method name
+//  │      │     └─────────────── return type (void if it returns nothing)
+//  │      └───────────────────── static: belongs to the class, not an instance
+//  └──────────────────────────── access modifier</code></pre>
+  <p>The <strong>signature</strong> is the name plus the parameter types — <code>add(int, int)</code>. The return type
+     is not part of it, which is why you cannot have two methods differing only in what they return.</p>
+
+  <h2>Calling</h2>
+  <pre><code>int sum = add(2, 3);              // same class, static method
+int sum2 = MathUtils.add(2, 3);   // static method on another class
+int len = name.length();          // instance method: called on an object</code></pre>
+
+  <h2>Parameters are passed by value</h2>
+  <p>Java is always pass-by-value. For objects, the value copied is the reference — so the method can change the object,
+     but cannot change which object the caller's variable points at.</p>
+  <pre><code>static void reassign(int n)       { n = 99; }
+static void reassign(List&lt;String&gt; list) { list = new ArrayList&lt;&gt;(); }
+static void mutate(List&lt;String&gt; list)   { list.add("added"); }
+
+int x = 1;
+reassign(x);                 // x is still 1
+
+List&lt;String&gt; names = new ArrayList&lt;&gt;();
+reassign(names);             // names is still the original, still empty
+mutate(names);               // names now contains "added"</code></pre>
+
+  <h2>Overloading</h2>
+  <p>Several methods may share a name if their parameter lists differ:</p>
+  <pre><code>static int    max(int a, int b)       { return a &gt; b ? a : b; }
+static double max(double a, double b) { return a &gt; b ? a : b; }
+static int    max(int a, int b, int c){ return max(max(a, b), c); }</code></pre>
+  <p>The compiler picks the most specific applicable version at compile time. Overload only when the methods truly do
+     the same thing to different inputs; otherwise give them different names.</p>
+
+  <h2>Varargs</h2>
+  <pre><code>static int sum(int... numbers) {      // numbers behaves like an int[]
+    int total = 0;
+    for (int n : numbers) total += n;
+    return total;
+}
+
+sum();              // 0
+sum(1, 2, 3);       // 6
+sum(new int[]{1,2}) // 3</code></pre>
+  <p>Only one varargs parameter is allowed and it must come last.</p>
+
+  <h2>Return values</h2>
+  <pre><code>static String grade(int score) {
+    if (score &gt;= 90) return "A";
+    if (score &gt;= 80) return "B";
+    return "C";                      // every path must return something
+}
+
+static void log(String message) {    // void: no return value
+    System.out.println(message);
+    if (message.isEmpty()) return;   // an early exit is still allowed
+}</code></pre>
+  <p>A method can only return one value. When you are tempted to return two, that is usually a signal to create a small
+     class or <code>record</code> (lesson 12).</p>
+
+  <h2>Scope and lifetime</h2>
+  <pre><code>public class Counter {
+    private int total;               // field: lives as long as the object
+
+    public void add(int amount) {
+        int doubled = amount * 2;    // local: exists only during this call
+        for (int i = 0; i &lt; 3; i++) {
+            int inner = i;           // exists only inside the loop body
+        }
+        // inner is not visible here
+        total += doubled;
+    }
+}</code></pre>
+  <p>A local variable shadows a field with the same name. That is what the <code>this.</code> prefix is for:</p>
+  <pre><code>public void setName(String name) {
+    this.name = name;                // this.name = the field, name = the parameter
+}</code></pre>
+
+  <h2>static versus instance methods</h2>
+  <table>
+    <tr><th>static</th><th>instance</th></tr>
+    <tr><td>Called on the class: <code>Math.abs(-3)</code></td><td>Called on an object: <code>list.size()</code></td></tr>
+    <tr><td>Cannot use <code>this</code> or read instance fields</td><td>Has access to the object's state</td></tr>
+    <tr><td>Good for pure helpers: parsing, formatting, maths</td><td>Good for behaviour tied to one object's data</td></tr>
+  </table>
+  <p>A method that does not touch instance state can be <code>static</code> — but in application code most methods
+     belong to objects, and frameworks like Spring rely on instances. Do not make everything static.</p>
+
+  <h2>Recursion</h2>
+  <pre><code>static long factorial(int n) {
+    if (n &lt;= 1) return 1;            // base case — without it, StackOverflowError
+    return n * factorial(n - 1);     // recursive case, moving toward the base
+}
+
+static int fibonacci(int n) {
+    return n &lt; 2 ? n : fibonacci(n - 1) + fibonacci(n - 2);
+}</code></pre>
+  <p>Every recursive method needs a base case and progress toward it. Java does not optimise tail calls, so deep
+     recursion (tens of thousands of frames) overflows the stack — prefer loops for large inputs. Recursion shines on
+     trees, directories, JSON and other nested structures.</p>
+
+  <h2>Writing methods worth reading</h2>
+  <ul>
+    <li><strong>One job.</strong> If the name needs an "and", split it.</li>
+    <li><strong>Short.</strong> Anything past roughly 20 lines usually hides two ideas.</li>
+    <li><strong>Named after what it does, not how.</strong> <code>calculateDiscount</code>, not
+        <code>doStuff2</code>.</li>
+    <li><strong>Few parameters.</strong> Three is plenty; more suggests a missing object.</li>
+    <li><strong>No surprises.</strong> A method called <code>getX()</code> should not write to the database.</li>
+    <li><strong>Validate input at the edges</strong> and fail loudly:</li>
+  </ul>
+  <pre><code>static double divide(int a, int b) {
+    if (b == 0) throw new IllegalArgumentException("Cannot divide by zero");
+    return (double) a / b;
+}</code></pre>
+
+  <h2>Documenting with Javadoc</h2>
+  <pre><code>/**
+ * Calculates the price after applying a percentage discount.
+ *
+ * @param price    the original price, must not be negative
+ * @param percent  discount between 0 and 100
+ * @return the discounted price
+ * @throws IllegalArgumentException if percent is outside 0..100
+ */
+public static double applyDiscount(double price, double percent) { ... }</code></pre>
+  <p>Document the <em>why</em> and the contract, not the obvious. IDEs show this on hover, which is most of its value.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Write <code>isPrime(int n)</code> and use it to print all primes below 100.</li>
+      <li>Overload a <code>describe</code> method for <code>int</code>, <code>String</code> and <code>boolean</code>,
+          and observe which one the compiler picks for <code>describe('a')</code>.</li>
+      <li>Write a varargs <code>average(double... values)</code> that throws
+          <code>IllegalArgumentException</code> when called with no arguments.</li>
+      <li>Implement <code>factorial</code> both recursively and with a loop; compare them for <code>n = 25</code> using
+          <code>long</code> and explain the result.</li>
+      <li>Refactor: take a 40-line <code>main</code> you have written and split it into three named methods.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

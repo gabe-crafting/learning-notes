@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frameworks and orchestration — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="15-frameworks.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Frameworks and orchestration</h1>
+  <p class="lead">LangChain, LlamaIndex, LangGraph and friends: what they genuinely give you, what they cost, and why
+     experienced teams often use less of them than you would expect.</p>
+
+  <h2>The honest position</h2>
+  <p>You have now built, with plain SDK calls: prompting, structured output, tool loops, retrieval, agents and memory.
+     None of it required a framework. That is not an accident — the provider SDKs absorbed a lot of what frameworks were
+     originally for.</p>
+  <p>Frameworks still earn their place when you want components you would otherwise write yourself (fifty document
+     loaders, a dozen vector-store adapters, retrieval strategies), or when you need something genuinely hard to build,
+     like durable stateful graphs. They cost you an abstraction layer between your code and the provider's
+     documentation, a dependency that changes faster than you would like, and debugging that goes through someone
+     else's call stack.</p>
+  <div class="note">
+    <strong>Learn the primitives first, then adopt selectively</strong>
+    A developer who understands the loop can use a framework well or drop it when it fights them. A developer who only
+    knows the framework is stuck when the abstraction leaks — and it will leak, usually in production. That is why this
+    course put frameworks in lesson 15 rather than lesson 3.
+  </div>
+
+  <h2>The landscape</h2>
+  <table>
+    <tr><th>Tool</th><th>What it is really for</th><th>Take it when</th></tr>
+    <tr><td><strong>LangChain</strong></td><td>A broad component library: loaders, splitters, store adapters, chains,
+        provider abstraction</td><td>You want batteries included and provider portability, and you accept the
+        API churn</td></tr>
+    <tr><td><strong>LlamaIndex</strong></td><td>Data-first RAG: ingestion, indexing, retrieval strategies,
+        query engines</td><td>The product <em>is</em> retrieval over documents — this is the most focused option</td></tr>
+    <tr><td><strong>LangGraph</strong></td><td>Agents as an explicit state graph, with persistence, resumption and
+        human-in-the-loop</td><td>You need durable, long-running, interruptible workflows — the strongest reason on this
+        table</td></tr>
+    <tr><td><strong>Pydantic AI</strong></td><td>Typed agents, structured output, dependency injection</td><td>You want
+        something small and typed rather than a platform</td></tr>
+    <tr><td><strong>Haystack</strong></td><td>Pipeline-oriented search and RAG</td><td>You like explicit pipeline
+        components</td></tr>
+    <tr><td><strong>DSPy</strong></td><td>Programmatic prompt optimisation against a metric</td><td>You have a solid
+        eval set and want prompts tuned automatically</td></tr>
+    <tr><td><strong>Semantic Kernel</strong></td><td>Microsoft's orchestration SDK (.NET-first, Python available)</td>
+        <td>You are in a .NET shop</td></tr>
+    <tr><td><strong>Vercel AI SDK</strong></td><td>TypeScript: streaming, tool calling and UI hooks</td><td>The frontend
+        is the product (lesson 20)</td></tr>
+  </table>
+
+  <h2>What the abstractions look like</h2>
+  <pre><code># LangChain, modern style (LCEL): compose runnables with |
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+prompt = ChatPromptTemplate.from_template(
+    "Answer using only this context:\n{context}\n\nQuestion: {question}"
+)
+chain = prompt | llm | StrOutputParser()
+answer = chain.invoke({"context": docs, "question": q})</code></pre>
+  <pre><code># LlamaIndex: the RAG happy path in four lines
+from llama_index.core import VectorStoreIndex, SimpleDirectoryReader
+
+documents = SimpleDirectoryReader("./docs").load_data()
+index = VectorStoreIndex.from_documents(documents)
+response = index.as_query_engine(similarity_top_k=5).query("What is the leave policy?")
+print(response, response.source_nodes)</code></pre>
+  <pre><code># LangGraph: a state machine with checkpointing
+from langgraph.graph import StateGraph, END
+
+graph = StateGraph(AgentState)
+graph.add_node("retrieve", retrieve_node)
+graph.add_node("answer", answer_node)
+graph.add_node("verify", verify_node)
+graph.set_entry_point("retrieve")
+graph.add_edge("retrieve", "answer")
+graph.add_conditional_edges("answer", needs_more_context, {"yes": "retrieve", "no": "verify"})
+graph.add_edge("verify", END)
+
+app = graph.compile(checkpointer=checkpointer)   # resumable, inspectable, interruptible</code></pre>
+  <p>The LlamaIndex snippet is genuinely four lines against the hundred-odd you wrote in lessons 8–11 — and it is also
+     the least tunable version of that pipeline. That trade is the whole decision.</p>
+
+  <h2>How to decide</h2>
+  <ol>
+    <li><strong>Prototype:</strong> use whatever gets you an answer fastest. LlamaIndex for RAG demos is hard to
+        beat.</li>
+    <li><strong>Production, simple pipeline</strong> (one or two calls, one retrieval): plain SDK plus your own thin
+        helpers. You will not miss the framework.</li>
+    <li><strong>Production, complex stateful agent</strong> (resumable, human-in-the-loop, multi-day runs): LangGraph or
+        a managed agent platform. Building durable execution yourself is a real project.</li>
+    <li><strong>Heavy document variety</strong> (dozens of formats and sources): borrow the loaders even if you write the
+        rest yourself — you can import just the pieces.</li>
+  </ol>
+  <p>Nothing stops you mixing: LlamaIndex readers for ingestion, your own retrieval and prompting, the provider SDK for
+     calls. Frameworks are libraries, not religions.</p>
+
+  <h2>The costs, stated plainly</h2>
+  <ul>
+    <li><strong>Debugging through layers.</strong> When the prompt sent to the model is not what you expected, you are
+        reading framework source to find where it was assembled. Turn on the framework's prompt logging early.</li>
+    <li><strong>Churn.</strong> These libraries move fast; tutorials go stale within months, and imports get
+        reorganised between minor versions. Pin versions.</li>
+    <li><strong>Lag behind provider features.</strong> A new capability lands in the provider SDK first and in the
+        framework later, sometimes partially.</li>
+    <li><strong>Hidden cost and latency.</strong> A convenient one-liner may be making three model calls. Check your
+        usage logs.</li>
+    <li><strong>Weak defaults presented as decisions.</strong> A default chunk size and a default k are not a retrieval
+        strategy — the tuning from lesson 12 is still yours to do.</li>
+  </ul>
+
+  <h2>If you do use one, use it well</h2>
+  <pre><code># 1. keep framework types at the edges, not through your whole codebase
+def answer(question: str, tenant: str) -> Answer:   # your own types in and out
+    ...                                              # framework used inside
+
+# 2. always be able to see the final prompt
+import langchain
+langchain.debug = True          # or the framework's tracing/callback hooks
+
+# 3. pin versions
+langchain-core==0.3.x
+llama-index-core==0.12.x</code></pre>
+  <p>The wrapper discipline from lesson 4 applies doubly here: if your business logic imports framework classes
+     everywhere, switching or dropping the framework becomes a rewrite. If it imports your own <code>answer()</code>,
+     it is an afternoon.</p>
+
+  <h2>Managed agent platforms</h2>
+  <p>A newer option sits between "framework" and "infrastructure": platforms where the provider runs the agent loop and
+     hosts the sandbox the tools execute in, with persisted agent configurations, sessions, scheduling and file storage.
+     You supply the configuration and your tools, and skip writing loop code, state files and a scheduler.</p>
+  <p>Worth evaluating when you need long-running or scheduled agents with a workspace, and you would otherwise be
+     building that infrastructure yourself. The trade is the usual one: less code you own, more platform you depend
+     on.</p>
+
+  <h2>What to say in an interview</h2>
+  <p>"I use the provider SDK directly for straightforward pipelines because it is easier to debug and stays current with
+     the API. I reach for LlamaIndex when ingestion variety is the problem, and LangGraph when I need durable, resumable
+     agent state with human approval. I keep framework types out of my domain code either way." That answer signals
+     judgement — which is what the question is testing. "I only know LangChain" does not.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Rebuild your lesson 11 RAG pipeline with LlamaIndex. Compare lines of code, and compare how easy it is to
+          change the chunking strategy.</li>
+      <li>Turn on prompt debugging in the framework and read the exact prompt it sends. Was it what you expected?</li>
+      <li>Rebuild your lesson 13 agent in LangGraph with a checkpointer. Kill the process mid-run and resume it.</li>
+      <li>Measure token usage for the same task in both implementations. Explain any difference.</li>
+      <li>Write a short decision note for a hypothetical team: framework or not, and why. Keep it — it is a good
+          portfolio artifact.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

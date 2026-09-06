@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Python for AI engineers — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="02-python-for-ai.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Python for AI engineers</h1>
+  <p class="lead">You already know how to program. This is the subset of Python this job actually uses, aimed at
+     someone arriving from JavaScript, Java or C#.</p>
+
+  <h2>Why Python</h2>
+  <p>Every model provider ships a Python SDK first, every retrieval and evaluation library is Python, and every research
+     artifact you might want to use is Python. TypeScript is a perfectly good second language here — SDKs exist for all
+     the major providers, and if you are building the UI you will write it anyway — but the ecosystem depth is in
+     Python. Learn enough of both to be dangerous; write the AI backend in Python.</p>
+
+  <h2>Environment: use uv</h2>
+  <pre><code># install uv (fast, replaces pip + venv + pyenv for most purposes)
+# Windows PowerShell:
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+uv init my-ai-app &amp;&amp; cd my-ai-app
+uv add anthropic pydantic python-dotenv
+uv add --dev pytest ruff
+uv run main.py</code></pre>
+  <p>The traditional route still works and you will see it everywhere:</p>
+  <pre><code>python -m venv .venv
+.venv\Scripts\activate          # Windows
+source .venv/bin/activate        # macOS / Linux
+pip install anthropic pydantic python-dotenv
+pip freeze &gt; requirements.txt</code></pre>
+  <div class="warn">
+    <strong>Never install into the system Python</strong>
+    One virtual environment per project, always. A global install is how you end up with two projects needing
+    incompatible versions of the same library and no way to tell which is loaded.
+  </div>
+
+  <h2>Secrets</h2>
+  <pre><code># .env  (add to .gitignore, never commit)
+ANTHROPIC_API_KEY=sk-ant-...</code></pre>
+  <pre><code>import os
+from dotenv import load_dotenv
+
+load_dotenv()
+api_key = os.environ["ANTHROPIC_API_KEY"]   # KeyError if missing — fail loudly
+timeout = float(os.getenv("TIMEOUT", "30")) # optional with a default</code></pre>
+  <p>The SDKs read <code>ANTHROPIC_API_KEY</code> (and the equivalents for other providers) from the environment
+     automatically, so in practice you rarely pass the key in code at all.</p>
+
+  <h2>The syntax differences that trip up developers</h2>
+  <pre><code># indentation is the block structure — no braces
+def greet(name: str) -> str:
+    if not name:
+        return "Hello, stranger"
+    return f"Hello, {name}"          # f-string interpolation
+
+# truthiness: empty string, empty list, empty dict, 0 and None are all falsy
+if not items:
+    ...
+
+# None, not null.  ==  compares values;  is  compares identity
+if value is None: ...
+
+# no ternary as you know it
+label = "one" if count == 1 else "many"
+
+# unpacking and multiple return values
+first, *rest = [1, 2, 3]
+def divmod2(a, b): return a // b, a % b
+q, r = divmod2(7, 2)</code></pre>
+
+  <h3>Collections</h3>
+  <pre><code>rows = [1, 2, 3]                       # list      → array
+point = (1, 2)                          # tuple     → immutable
+seen = {"a", "b"}                       # set
+config = {"model": "claude-opus-5"}     # dict      → object / Map
+
+squares = [x * x for x in rows if x % 2]           # comprehension
+by_id = {u["id"]: u for u in users}                 # dict comprehension
+chunks = (line.strip() for line in file)            # generator: lazy, memory-friendly
+
+from collections import defaultdict, Counter
+groups = defaultdict(list)
+groups[key].append(value)
+Counter(words).most_common(5)</code></pre>
+  <p>Comprehensions are the Python equivalent of <code>map</code>/<code>filter</code> chains, and generators matter here
+     because ingestion pipelines routinely process files too large to hold in memory.</p>
+
+  <h2>Type hints</h2>
+  <p>Python is dynamically typed, but professional code is annotated. Types are not enforced at runtime — they document
+     intent, drive editor completion, and let <code>mypy</code>/<code>pyright</code> catch mistakes.</p>
+  <pre><code>from typing import Iterable
+
+def chunk_text(text: str, size: int = 1000, overlap: int = 100) -> list[str]:
+    ...
+
+def embed_all(chunks: Iterable[str]) -> list[list[float]]:
+    ...
+
+Score = float | None            # union; "Optional[float]" is the older spelling</code></pre>
+
+  <h2>Pydantic: the library that makes LLM output usable</h2>
+  <p>Pydantic validates and coerces data against a declared model. In AI work it does three jobs: it defines the JSON
+     schema you send to the model, it validates what comes back, and it types your application config.</p>
+  <pre><code>from pydantic import BaseModel, Field, ValidationError
+from datetime import date
+
+class Invoice(BaseModel):
+    vendor: str
+    invoice_number: str
+    issued: date
+    total: float = Field(gt=0, description="Total amount including tax")
+    line_items: list[str] = []
+
+# parse untrusted JSON — from a model, an API, a file
+try:
+    invoice = Invoice.model_validate_json(raw_json)
+except ValidationError as e:
+    print(e.errors())      # structured, per-field failures
+
+invoice.model_dump()            # → dict
+invoice.model_dump_json()       # → JSON string
+Invoice.model_json_schema()     # → JSON Schema, which is what you hand the model</code></pre>
+  <p>That last line is the reason Pydantic is everywhere in this field: your Python class <em>is</em> the contract you
+     give the model, and the same class verifies the response. Lesson 6 builds on this.</p>
+
+  <h2>Async, and why it matters here</h2>
+  <p>LLM calls take seconds and are almost entirely waiting on the network. Doing them one after another wastes that
+     time; doing them concurrently is often a 10x speed-up on batch work.</p>
+  <pre><code>import asyncio
+from anthropic import AsyncAnthropic
+
+client = AsyncAnthropic()
+
+async def summarise(text: str) -> str:
+    response = await client.messages.create(
+        model="claude-sonnet-5",
+        max_tokens=1000,
+        messages=[{"role": "user", "content": f"Summarise in one sentence:\n\n{text}"}],
+    )
+    return next(b.text for b in response.content if b.type == "text")
+
+async def main(documents: list[str]) -> list[str]:
+    return await asyncio.gather(*(summarise(d) for d in documents))
+
+asyncio.run(main(docs))</code></pre>
+  <p>Rules of thumb, coming from JavaScript: <code>async def</code> is <code>async function</code>,
+     <code>await</code> is the same, <code>asyncio.gather</code> is <code>Promise.all</code>. The difference is that
+     Python does not run an event loop by default — <code>asyncio.run</code> starts one, and a blocking call
+     (<code>time.sleep</code>, <code>requests.get</code>, a synchronous database driver) inside async code stalls
+     everything.</p>
+  <pre><code># bound the concurrency, or you will hit rate limits and 429s
+semaphore = asyncio.Semaphore(5)
+
+async def limited(text: str) -> str:
+    async with semaphore:
+        return await summarise(text)</code></pre>
+
+  <h2>HTTP, files and JSON</h2>
+  <pre><code>import json, httpx
+from pathlib import Path
+
+data = json.loads(Path("docs.json").read_text(encoding="utf-8"))
+Path("out.json").write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+with httpx.Client(timeout=10) as http:
+    r = http.get("https://api.example.com/items", params={"page": 1})
+    r.raise_for_status()
+    items = r.json()</code></pre>
+  <p><code>httpx</code> is the modern choice because it does both sync and async; <code>requests</code> is the classic
+     sync-only one you will meet in older code.</p>
+
+  <h2>Project layout that scales past a notebook</h2>
+  <pre><code>my-ai-app/
+├── pyproject.toml
+├── .env / .env.example
+├── src/app/
+│   ├── config.py         settings, loaded once
+│   ├── llm.py            client + wrappers around model calls
+│   ├── prompts/          prompt templates as files, version controlled
+│   ├── ingest.py         document loading and chunking
+│   ├── retrieval.py      embeddings and search
+│   ├── agents.py         tool definitions and loops
+│   └── api.py            FastAPI app
+├── evals/                datasets and eval scripts
+└── tests/</code></pre>
+  <div class="note">
+    <strong>Notebooks are for exploration, not for products</strong>
+    Jupyter is genuinely useful for poking at data and trying a prompt. But hidden execution order and un-testable cells
+    make it a bad home for anything that runs in production. Prototype in a notebook, then move the code into modules
+    with tests.
+  </div>
+
+  <h2>Tooling worth setting up once</h2>
+  <pre><code>uv run ruff check --fix .      # lint + import sorting
+uv run ruff format .           # formatting (Black-compatible)
+uv run pytest -q               # tests
+uv run mypy src                # type checking (optional but recommended)</code></pre>
+  <pre><code># tests/test_chunking.py
+def test_chunks_overlap():
+    chunks = chunk_text("a" * 2500, size=1000, overlap=100)
+    assert len(chunks) == 3
+    assert chunks[0][-100:] == chunks[1][:100]</code></pre>
+
+  <h2>Things that will bite you</h2>
+  <ul>
+    <li><strong>Mutable default arguments.</strong> <code>def f(items=[])</code> shares one list across all calls. Use
+        <code>None</code> and create inside.</li>
+    <li><strong>Late-binding closures</strong> in loops — capture with a default argument or
+        <code>functools.partial</code>.</li>
+    <li><strong>Encoding.</strong> Always pass <code>encoding="utf-8"</code> when reading and writing files; on Windows
+        the default is not UTF-8 and your PDFs will mangle.</li>
+    <li><strong>Blocking calls in async code.</strong> Use <code>asyncio.to_thread(...)</code> to push a synchronous
+        library off the event loop.</li>
+    <li><strong>Floating point.</strong> Same as everywhere: never use it for money.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Create a project with <code>uv</code>, add <code>anthropic</code> and <code>pydantic</code>, and load an API
+          key from <code>.env</code> without hard-coding it.</li>
+      <li>Write <code>chunk_text(text, size, overlap) -> list[str]</code> with type hints and a pytest test. You will
+          reuse it in lesson 10.</li>
+      <li>Define a Pydantic model for a support ticket (id, subject, body, priority enum, created date) and print its
+          JSON schema.</li>
+      <li>Write an async function that summarises 10 strings concurrently with a semaphore of 3, and time it against
+          the sequential version.</li>
+      <li>Set up ruff and pytest, and make both pass on your project.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

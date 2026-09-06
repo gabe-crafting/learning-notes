@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spring Security basics — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="11-security.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Spring Security basics</h1>
+  <p class="lead">Who are you (authentication), and what may you do (authorisation). Security is the area where copying
+     a random tutorial does the most damage, so go slowly here.</p>
+
+  <h2>Adding it</h2>
+  <pre><code>&lt;dependency&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-security&lt;/artifactId&gt;
+&lt;/dependency&gt;</code></pre>
+  <p>The moment it is on the classpath, <strong>every endpoint requires authentication</strong>, a login form appears,
+     and a generated password is printed in the startup log. That is deliberate: secure by default, then you open what
+     you choose.</p>
+
+  <h2>The filter chain</h2>
+  <pre><code>request
+  → SecurityFilterChain
+      → CorsFilter
+      → CsrfFilter
+      → your authentication filter (JWT, session, basic)
+      → AuthorizationFilter        ← decides allow / deny
+  → DispatcherServlet → your controller</code></pre>
+  <p>Security happens <em>before</em> Spring MVC. That is why a 401 or 403 never reaches your
+     <code>@RestControllerAdvice</code> unless you configure the entry points to produce it.</p>
+
+  <h2>Configuring the rules</h2>
+  <pre><code>@Configuration
+@EnableWebSecurity
+public class SecurityConfig {
+
+    @Bean
+    SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        return http
+            .csrf(csrf -&gt; csrf.disable())                      // safe ONLY for a stateless token API
+            .sessionManagement(s -&gt; s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            .authorizeHttpRequests(auth -&gt; auth
+                .requestMatchers("/api/auth/**", "/actuator/health").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/tasks/**").hasAnyRole("USER", "ADMIN")
+                .requestMatchers("/api/admin/**").hasRole("ADMIN")
+                .anyRequest().authenticated())                  // deny-by-default, always last
+            .httpBasic(Customizer.withDefaults())
+            .build();
+    }
+
+    @Bean
+    PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}</code></pre>
+  <p>Order matters: the first matching rule wins, so put specific paths before general ones and finish with
+     <code>anyRequest().authenticated()</code>.</p>
+  <div class="warn">
+    <strong>About disabling CSRF</strong>
+    CSRF protection matters when the browser sends credentials automatically — cookies or session ids. For a stateless
+    API authenticated by an <code>Authorization</code> header, it is not applicable and is normally disabled. If you use
+    cookie-based sessions, leave it on and send the token from the frontend.
+  </div>
+
+  <h2>Users and passwords</h2>
+  <pre><code>@Service
+public class DbUserDetailsService implements UserDetailsService {
+
+    private final UserRepository repository;
+
+    public DbUserDetailsService(UserRepository repository) { this.repository = repository; }
+
+    @Override
+    public UserDetails loadUserByUsername(String email) {
+        AppUser user = repository.findByEmail(email)
+                .orElseThrow(() -&gt; new UsernameNotFoundException("Bad credentials"));
+
+        return User.withUsername(user.getEmail())
+                   .password(user.getPasswordHash())     // the HASH, never the password
+                   .roles(user.getRoles().toArray(String[]::new))
+                   .build();
+    }
+}</code></pre>
+  <pre><code>String hash = passwordEncoder.encode(rawPassword);          // on registration
+boolean ok  = passwordEncoder.matches(rawPassword, hash);   // never compare strings yourself</code></pre>
+  <ul>
+    <li>Store only BCrypt (or Argon2) hashes. Never plain text, never MD5 or plain SHA.</li>
+    <li>Never log a password, a token, or a hash.</li>
+    <li>Return the same error for "unknown user" and "wrong password" — otherwise you have built an account
+        enumerator.</li>
+    <li>Rate-limit login attempts.</li>
+  </ul>
+
+  <h2>JWT authentication</h2>
+  <p>The common pattern for a stateless API: the client logs in once, receives a signed token, and sends it on every
+     request.</p>
+  <pre><code>POST /api/auth/login  {"email": "...", "password": "..."}
+→ 200 {"token": "eyJhbGciOiJIUzI1NiJ9...", "expiresIn": 3600}
+
+GET /api/tasks
+Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...</code></pre>
+  <pre><code>@Component
+public class JwtService {
+
+    private final SecretKey key;
+    private final Duration ttl;
+
+    public JwtService(@Value("${app.jwt.secret}") String secret,
+                      @Value("${app.jwt.ttl:1h}") Duration ttl) {
+        this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+        this.ttl = ttl;
+    }
+
+    public String generate(UserDetails user) {
+        Instant now = Instant.now();
+        return Jwts.builder()
+                .subject(user.getUsername())
+                .claim("roles", user.getAuthorities().stream().map(Object::toString).toList())
+                .issuedAt(Date.from(now))
+                .expiration(Date.from(now.plus(ttl)))
+                .signWith(key)
+                .compact();
+    }
+
+    public Jws&lt;Claims&gt; parse(String token) {        // throws if signature or expiry is invalid
+        return Jwts.parser().verifyWith(key).build().parseSignedClaims(token);
+    }
+}</code></pre>
+  <pre><code>@Component
+public class JwtAuthFilter extends OncePerRequestFilter {
+
+    private final JwtService jwt;
+    private final UserDetailsService users;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+                                    FilterChain chain) throws ServletException, IOException {
+
+        String header = request.getHeader("Authorization");
+        if (header != null &amp;&amp; header.startsWith("Bearer ")) {
+            try {
+                String email = jwt.parse(header.substring(7)).getPayload().getSubject();
+                UserDetails user = users.loadUserByUsername(email);
+                var auth = new UsernamePasswordAuthenticationToken(
+                        user, null, user.getAuthorities());
+                SecurityContextHolder.getContext().setAuthentication(auth);
+            } catch (JwtException e) {
+                log.debug("Invalid token", e);      // leave the context unauthenticated
+            }
+        }
+        chain.doFilter(request, response);
+    }
+}</code></pre>
+  <pre><code>.addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)</code></pre>
+  <p>Practical notes: keep the secret out of the repository and at least 256 bits; keep access tokens short-lived
+     (15–60 minutes) with a refresh token for renewal; remember that a JWT cannot be revoked before expiry unless you
+     keep a denylist. For anything beyond a learning project, prefer an existing identity provider (Keycloak, Auth0,
+     Cognito) with <code>spring-boot-starter-oauth2-resource-server</code> over hand-rolled tokens.</p>
+
+  <h2>Method security</h2>
+  <pre><code>@Configuration
+@EnableMethodSecurity
+public class MethodSecurityConfig { }</code></pre>
+  <pre><code>@PreAuthorize("hasRole('ADMIN')")
+public void deleteUser(Long id) { ... }
+
+@PreAuthorize("hasAuthority('SCOPE_tasks:write')")
+public TaskResponse create(CreateTaskRequest request) { ... }
+
+@PreAuthorize("#userId == authentication.name or hasRole('ADMIN')")
+public List&lt;TaskResponse&gt; tasksOf(String userId) { ... }
+
+@PostAuthorize("returnObject.ownerId == authentication.name")
+public TaskResponse get(Long id) { ... }</code></pre>
+  <p>Remember the proxy rule: <code>@PreAuthorize</code> on a method called from inside the same bean does nothing.</p>
+
+  <h2>Reading the current user</h2>
+  <pre><code>@GetMapping("/me")
+public UserResponse me(@AuthenticationPrincipal UserDetails user) {
+    return service.byEmail(user.getUsername());
+}
+
+// anywhere else
+Authentication auth = SecurityContextHolder.getContext().getAuthentication();</code></pre>
+
+  <h2>Roles versus authorities</h2>
+  <pre><code>hasRole("ADMIN")        → checks for the authority "ROLE_ADMIN"   (the prefix is added for you)
+hasAuthority("ROLE_ADMIN")  → the same check, written out
+hasAuthority("tasks:write") → a fine-grained permission</code></pre>
+  <p>Roles are coarse ("who you are"), authorities fine ("what you may do"). Mixing them up is the usual cause of "I
+     have the role but I get 403".</p>
+
+  <h2>Testing secured endpoints</h2>
+  <pre><code>@WebMvcTest(TaskController.class)
+class TaskControllerSecurityTest {
+
+    @Autowired MockMvc mvc;
+
+    @Test
+    void anonymousIsRejected() throws Exception {
+        mvc.perform(get("/api/tasks")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    @WithMockUser(roles = "USER")
+    void userCanList() throws Exception {
+        mvc.perform(get("/api/tasks")).andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(roles = "USER")
+    void userCannotDelete() throws Exception {
+        mvc.perform(delete("/api/tasks/1").with(csrf())).andExpect(status().isForbidden());
+    }
+}</code></pre>
+  <p>Write the negative tests. An endpoint that is accidentally public passes every happy-path test.</p>
+
+  <h2>The junior checklist</h2>
+  <ul>
+    <li>Deny by default; open specific paths deliberately.</li>
+    <li>Hash passwords with BCrypt; never store or log secrets.</li>
+    <li>Validate every input — Bean Validation is a security control, not just tidiness.</li>
+    <li>Use parameterised queries; JPA does this for you unless you concatenate strings into a native query.</li>
+    <li>Do not put sensitive data in URLs — they end up in logs and browser history.</li>
+    <li>HTTPS everywhere; secure, http-only cookies if you use sessions.</li>
+    <li>Check authorisation on the object, not just the endpoint: "may this user edit <em>this</em> task?"</li>
+    <li>Keep dependencies patched — known CVEs are the most common real breach.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Add Spring Security, observe every endpoint locked, then permit <code>/actuator/health</code> only.</li>
+      <li>Store users in the database with BCrypt hashes and implement <code>UserDetailsService</code>.</li>
+      <li>Implement login returning a JWT and a filter that authenticates from the header.</li>
+      <li>Restrict <code>DELETE /api/tasks/**</code> to ADMIN and prove with a test that USER gets 403.</li>
+      <li>Add an ownership check so a user can only read their own tasks — and test the negative case.</li>
+      <li>Try an expired and a tampered token and confirm both are rejected.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

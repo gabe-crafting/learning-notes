@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Packaging and deployment — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="15-packaging-deploy.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Packaging and deployment</h1>
+  <p class="lead">From source on your laptop to a container running somewhere else, configured by the environment
+     rather than by edits.</p>
+
+  <h2>The jar</h2>
+  <pre><code>./mvnw clean package
+java -jar target/tasks-0.0.1-SNAPSHOT.jar</code></pre>
+  <p><code>spring-boot-maven-plugin</code> produces an executable jar containing your classes, every dependency and an
+     embedded Tomcat. One file, one command, no application server to install.</p>
+  <pre><code>java -jar app.jar --server.port=9090
+java -jar app.jar --spring.profiles.active=prod
+java -Xmx512m -jar app.jar</code></pre>
+
+  <h2>Dockerfile</h2>
+  <pre><code># ---- build stage ----
+FROM eclipse-temurin:21-jdk-alpine AS build
+WORKDIR /app
+
+COPY .mvn/ .mvn/
+COPY mvnw pom.xml ./
+RUN ./mvnw dependency:go-offline -B          # cached unless pom.xml changes
+
+COPY src/ src/
+RUN ./mvnw clean package -DskipTests
+
+# ---- runtime stage ----
+FROM eclipse-temurin:21-jre-alpine
+WORKDIR /app
+
+RUN addgroup -S app &amp;&amp; adduser -S app -G app
+USER app                                      # never run as root
+
+COPY --from=build /app/target/*.jar app.jar
+
+EXPOSE 8080
+ENTRYPOINT ["java", "-jar", "app.jar"]</code></pre>
+  <pre><code>docker build -t tasks:1.0 .
+docker run -p 8080:8080 -e SPRING_PROFILES_ACTIVE=prod -e DB_PASSWORD=... tasks:1.0</code></pre>
+  <p>The two stages matter: the final image contains a JRE and your jar, not a JDK, Maven and the whole build cache —
+     roughly 200 MB instead of 800 MB, with a much smaller attack surface.</p>
+
+  <h3>Or skip the Dockerfile</h3>
+  <pre><code>./mvnw spring-boot:build-image -Dspring-boot.build-image.imageName=tasks:1.0</code></pre>
+  <p>Boot builds an optimised image with Cloud Native Buildpacks — layered, non-root, sensible JVM defaults, no
+     Dockerfile to maintain.</p>
+
+  <h2>Compose for local end-to-end</h2>
+  <pre><code>services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: tasks
+      POSTGRES_USER: tasks
+      POSTGRES_PASSWORD: tasks
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tasks"]
+      interval: 5s
+      retries: 5
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/tasks
+      SPRING_DATASOURCE_USERNAME: tasks
+      SPRING_DATASOURCE_PASSWORD: tasks
+      SPRING_PROFILES_ACTIVE: docker
+    ports:
+      - "8080:8080"</code></pre>
+  <p>Note the hostname <code>db</code>: inside the compose network, service names resolve. <code>localhost</code> from
+     the app container means the container itself, which is the classic first mistake.</p>
+
+  <h2>Configuration in production</h2>
+  <pre><code>SPRING_DATASOURCE_URL=jdbc:postgresql://prod-host:5432/tasks
+SPRING_DATASOURCE_USERNAME=tasks
+SPRING_DATASOURCE_PASSWORD=***          # from the platform's secret store
+SPRING_PROFILES_ACTIVE=prod
+APP_JWT_SECRET=***</code></pre>
+  <p>Every property has an environment-variable form: uppercase, dots and hyphens to underscores. The same image runs
+     in every environment, differing only by the variables passed to it. That is the property you are protecting — an
+     image that has to be rebuilt to change an environment is not deployable.</p>
+
+  <h3>JVM settings in a container</h3>
+  <pre><code>ENV JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError"
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]</code></pre>
+  <p>Modern JVMs are container-aware, but sizing the heap as a percentage of the container limit rather than a fixed
+     <code>-Xmx</code> keeps it correct when the limit changes.</p>
+
+  <h2>A production checklist</h2>
+  <ul>
+    <li><code>ddl-auto: validate</code>, schema owned by Flyway.</li>
+    <li>No secrets in the image or the repository.</li>
+    <li>Actuator: only <code>health</code> and <code>info</code> exposed publicly.</li>
+    <li>Graceful shutdown enabled.</li>
+    <li>Connection pool sized deliberately (<code>spring.datasource.hikari.maximum-pool-size</code>) — bigger is not
+        better; the database has limits.</li>
+    <li>Timeouts on every outbound call.</li>
+    <li>Logs to stdout, structured, no personal data.</li>
+    <li>Health and readiness probes wired to the orchestrator.</li>
+    <li>Resource limits set on the container.</li>
+    <li>A rollback plan — know how to deploy the previous image.</li>
+  </ul>
+
+  <h2>Continuous integration</h2>
+  <pre><code># .github/workflows/build.yml
+name: build
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+      - run: ./mvnw -B verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jar
+          path: target/*.jar</code></pre>
+  <p>The bar for a pull request: it compiles, the tests pass, and the artifact builds. Testcontainers works on GitHub
+     Actions runners, so integration tests can run here too.</p>
+
+  <h2>Deployment strategies, briefly</h2>
+  <table>
+    <tr><td><strong>Rolling</strong></td><td>Replace instances gradually. The default in Kubernetes. Requires that two
+        versions can run at once — which is why migrations must be backwards compatible.</td></tr>
+    <tr><td><strong>Blue-green</strong></td><td>Two environments, switch traffic at once. Instant rollback, double the
+        resources.</td></tr>
+    <tr><td><strong>Canary</strong></td><td>Send a small percentage of traffic to the new version first.</td></tr>
+  </table>
+
+  <h2>Where a small service can run</h2>
+  <ul>
+    <li><strong>A single VM</strong> with Docker Compose and a reverse proxy — perfectly respectable, and the cheapest
+        way to learn.</li>
+    <li><strong>Managed container platforms</strong> — Railway, Render, Fly.io, Google Cloud Run: push an image, get a
+        URL.</li>
+    <li><strong>Kubernetes</strong> — what most companies with several services use. Learn Docker thoroughly
+        first.</li>
+  </ul>
+
+  <h2>Common first-deployment failures</h2>
+  <table>
+    <tr><th>Symptom</th><th>Usual cause</th></tr>
+    <tr><td>Works locally, cannot reach the database in Docker</td><td>Using <code>localhost</code> instead of the
+        service name</td></tr>
+    <tr><td>Container exits immediately</td><td>Read the logs — usually a missing required property</td></tr>
+    <tr><td>OOMKilled</td><td>Heap larger than the container memory limit</td></tr>
+    <tr><td>Migration fails on startup</td><td>An edited migration, or a schema that drifted</td></tr>
+    <tr><td>Requests dropped during deploy</td><td>No graceful shutdown, or no readiness probe</td></tr>
+    <tr><td>Frontend gets CORS errors</td><td>Production origin not in the allowed list</td></tr>
+  </table>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Build the jar and run it with three different profiles from the command line.</li>
+      <li>Write the multi-stage Dockerfile and compare the image size against a single-stage one.</li>
+      <li>Run the app and Postgres together with Docker Compose, configured entirely by environment variables.</li>
+      <li>Try <code>spring-boot:build-image</code> and compare with your Dockerfile.</li>
+      <li>Set up a GitHub Actions workflow that builds and tests on every push.</li>
+      <li>Deploy to a free container platform and hit the health endpoint over the internet.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

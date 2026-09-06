@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Your first Spring Boot app — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="02-first-boot-app.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Your first Spring Boot app</h1>
+  <p class="lead">Generate a project, understand every file in it, and get an HTTP endpoint responding in about ten
+     minutes.</p>
+
+  <h2>Generate the project</h2>
+  <p>Go to <a href="https://start.spring.io">start.spring.io</a> (or use the IntelliJ "Spring Initializr" wizard, which
+     is the same thing) and choose:</p>
+  <table>
+    <tr><td>Project</td><td>Maven</td></tr>
+    <tr><td>Language</td><td>Java</td></tr>
+    <tr><td>Spring Boot</td><td>the latest 3.x release (not a SNAPSHOT or milestone)</td></tr>
+    <tr><td>Group</td><td><code>com.example</code></td></tr>
+    <tr><td>Artifact</td><td><code>tasks</code></td></tr>
+    <tr><td>Packaging</td><td>Jar</td></tr>
+    <tr><td>Java</td><td>21</td></tr>
+    <tr><td>Dependencies</td><td>Spring Web, Spring Boot DevTools, Validation</td></tr>
+  </table>
+  <p>Download, unzip, open in your IDE. You can also do it from the terminal:</p>
+  <pre><code>curl https://start.spring.io/starter.zip \
+  -d dependencies=web,devtools,validation \
+  -d javaVersion=21 -d type=maven-project \
+  -d groupId=com.example -d artifactId=tasks \
+  -o tasks.zip</code></pre>
+
+  <h2>What you got</h2>
+  <pre><code>tasks/
+├── pom.xml
+├── mvnw, mvnw.cmd, .mvn/         the Maven wrapper — commit these
+└── src/
+    ├── main/
+    │   ├── java/com/example/tasks/TasksApplication.java
+    │   └── resources/
+    │       ├── application.properties
+    │       ├── static/            served as-is at /
+    │       └── templates/         server-rendered views (not needed for a REST API)
+    └── test/java/com/example/tasks/TasksApplicationTests.java</code></pre>
+
+  <h3>pom.xml</h3>
+  <pre><code>&lt;parent&gt;
+    &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+    &lt;artifactId&gt;spring-boot-starter-parent&lt;/artifactId&gt;
+    &lt;version&gt;3.3.2&lt;/version&gt;
+&lt;/parent&gt;
+
+&lt;dependencies&gt;
+    &lt;dependency&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-starter-web&lt;/artifactId&gt;   &lt;!-- no version needed --&gt;
+    &lt;/dependency&gt;
+    &lt;dependency&gt;
+        &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+        &lt;artifactId&gt;spring-boot-starter-test&lt;/artifactId&gt;
+        &lt;scope&gt;test&lt;/scope&gt;
+    &lt;/dependency&gt;
+&lt;/dependencies&gt;
+
+&lt;build&gt;
+    &lt;plugins&gt;
+        &lt;plugin&gt;
+            &lt;groupId&gt;org.springframework.boot&lt;/groupId&gt;
+            &lt;artifactId&gt;spring-boot-maven-plugin&lt;/artifactId&gt;   &lt;!-- builds the runnable jar --&gt;
+        &lt;/plugin&gt;
+    &lt;/plugins&gt;
+&lt;/build&gt;</code></pre>
+  <p>The parent pins compatible versions for everything, which is why your dependencies have no
+     <code>&lt;version&gt;</code> tags. <code>spring-boot-starter-web</code> alone brings in Spring MVC, Jackson,
+     validation support and an embedded Tomcat.</p>
+
+  <h3>The main class</h3>
+  <pre><code>package com.example.tasks;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class TasksApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(TasksApplication.class, args);
+    }
+}</code></pre>
+  <p><code>@SpringBootApplication</code> is three annotations in one:</p>
+  <ul>
+    <li><code>@SpringBootConfiguration</code> — this class may define beans.</li>
+    <li><code>@EnableAutoConfiguration</code> — configure things based on what is on the classpath.</li>
+    <li><code>@ComponentScan</code> — find annotated classes <strong>in this package and below</strong>.</li>
+  </ul>
+  <div class="warn">
+    <strong>Keep the main class at the root package</strong>
+    Component scanning starts from its package. Put your classes in <code>com.example.tasks.*</code>. A class in
+    <code>com.other</code> will simply never be found, and the error ("no qualifying bean") will not tell you why.
+  </div>
+
+  <h2>Run it</h2>
+  <pre><code>./mvnw spring-boot:run          # or click Run on the main class</code></pre>
+  <pre><code>  .   ____          _
+ /\\ / ___'_ __ _ _(_)_ __  __ _
+( ( )\___ | '_ | '_| | '_ \/ _` |
+ \\/  ___)| |_)| | | | | || (_| |
+  '  |____| .__|_| |_|_| |_\__, |
+ =========|_|==============|___/
+Tomcat started on port 8080 (http)
+Started TasksApplication in 1.42 seconds</code></pre>
+  <p>Visit <code>http://localhost:8080</code> — a white-label error page, because there are no endpoints yet. The server
+     is running; that is the point.</p>
+
+  <h2>Your first endpoint</h2>
+  <pre><code>package com.example.tasks;
+
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+public class HelloController {
+
+    @GetMapping("/hello")
+    public String hello(@RequestParam(defaultValue = "world") String name) {
+        return "Hello, " + name;
+    }
+}</code></pre>
+  <pre><code>curl http://localhost:8080/hello
+curl "http://localhost:8080/hello?name=Gabe"</code></pre>
+
+  <h3>Returning JSON</h3>
+  <pre><code>record Task(Long id, String title, boolean done) { }
+
+@RestController
+@RequestMapping("/api/tasks")
+public class TaskController {
+
+    @GetMapping
+    public List&lt;Task&gt; all() {
+        return List.of(new Task(1L, "Learn Spring", false),
+                       new Task(2L, "Build an API", false));
+    }
+}</code></pre>
+  <pre><code>$ curl http://localhost:8080/api/tasks
+[{"id":1,"title":"Learn Spring","done":false},{"id":2,"title":"Build an API","done":false}]</code></pre>
+  <p>You wrote no serialisation code. Jackson is on the classpath, so Spring converts the returned object to JSON
+     automatically — that is auto-configuration doing its job.</p>
+
+  <h2>Configuration</h2>
+  <p><code>src/main/resources/application.properties</code> (or rename it to <code>application.yml</code>):</p>
+  <pre><code>server.port=8081
+spring.application.name=tasks
+logging.level.com.example.tasks=DEBUG</code></pre>
+  <pre><code>server:
+  port: 8081
+spring:
+  application:
+    name: tasks
+logging:
+  level:
+    com.example.tasks: DEBUG</code></pre>
+  <p>YAML is the more common choice in real projects because nested configuration becomes readable. Lesson 4 goes into
+     detail.</p>
+
+  <h2>DevTools</h2>
+  <p>With <code>spring-boot-devtools</code> on the classpath, the app restarts automatically when classes are recompiled
+     (in IntelliJ: Build → Recompile, or enable build-on-save). It is a development-only dependency and is disabled in a
+     packaged jar.</p>
+
+  <h2>The test that came with it</h2>
+  <pre><code>@SpringBootTest
+class TasksApplicationTests {
+
+    @Test
+    void contextLoads() { }
+}</code></pre>
+  <p>It looks trivial and is not: it starts the whole application context, so it fails whenever a bean cannot be
+     created, a required property is missing, or two beans conflict. Keep it.</p>
+
+  <h2>Packaging</h2>
+  <pre><code>./mvnw clean package
+java -jar target/tasks-0.0.1-SNAPSHOT.jar</code></pre>
+  <p>One self-contained file with the web server inside — this is what you deploy.</p>
+
+  <h2>Reading startup failures</h2>
+  <pre><code>***************************
+APPLICATION FAILED TO START
+***************************
+
+Description:
+Web server failed to start. Port 8080 was already in use.
+
+Action:
+Identify and stop the process that's listening on port 8080 or configure
+this application to listen on another port.</code></pre>
+  <p>Boot's failure analysers turn common problems into readable advice. Read the "Description" and "Action" before
+     scrolling into the stack trace.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Generate the project and get it running. Confirm the banner and the port in the log.</li>
+      <li>Add <code>/hello</code> and call it with and without the <code>name</code> parameter.</li>
+      <li>Return a <code>record</code> from an endpoint and inspect the JSON. Add a <code>LocalDate</code> field and see
+          how it is rendered.</li>
+      <li>Change the port to 9090 in <code>application.yml</code> and restart.</li>
+      <li>Move a controller into a package outside <code>com.example.tasks</code>, observe the 404, then move it back.
+          Now you have seen the component-scan rule fail for yourself.</li>
+      <li>Package the jar and run it with <code>java -jar</code>.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

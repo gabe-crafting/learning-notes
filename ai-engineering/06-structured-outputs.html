@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Structured outputs — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="06-structured-outputs.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Structured outputs</h1>
+  <p class="lead">Turning a text generator into a component your program can rely on. This is the single most useful
+     technique in applied LLM work.</p>
+
+  <h2>The problem</h2>
+  <pre><code># asking nicely and hoping
+prompt = "Extract the invoice total. Reply with JSON like {\"total\": 123.45}"
+
+# what you get, across a few hundred calls:
+{"total": 123.45}
+```json\n{"total": 123.45}\n```
+Sure! Here is the JSON you requested: {"total": 123.45}
+{"total": "123.45 EUR"}
+{"total": 123.45, "currency": "EUR"}      # a field you did not ask for</code></pre>
+  <p>Every one of those variants breaks <code>json.loads</code> or your downstream code. Regex-and-pray parsing is the
+     classic beginner solution, and it fails in production at exactly the rate that makes it annoying to debug.</p>
+
+  <h2>The solution: constrain the output</h2>
+  <p>Modern APIs let you specify a JSON Schema that the response <em>must</em> conform to. The provider enforces it
+     during generation, so what comes back is valid by construction — not by luck.</p>
+
+  <h3>With Pydantic (the ergonomic path)</h3>
+  <pre><code>from pydantic import BaseModel, Field
+import anthropic
+
+class Invoice(BaseModel):
+    vendor: str
+    invoice_number: str
+    issue_date: str = Field(description="ISO date, YYYY-MM-DD")
+    currency: str = Field(description="ISO 4217 code, e.g. EUR")
+    total: float
+    line_items: list[str]
+
+client = anthropic.Anthropic()
+
+response = client.messages.parse(
+    model="claude-opus-5",
+    max_tokens=4000,
+    messages=[{"role": "user", "content": f"Extract the invoice data:\n\n{document_text}"}],
+    output_format=Invoice,
+)
+
+invoice: Invoice = response.parsed_output    # already validated
+print(invoice.total, invoice.currency)</code></pre>
+  <p>Your class is the contract in both directions: it generates the schema sent to the model, and it validates what
+     comes back. One definition, no drift.</p>
+
+  <h3>With a raw JSON Schema</h3>
+  <pre><code>response = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=4000,
+    messages=[{"role": "user", "content": document_text}],
+    output_config={
+        "format": {
+            "type": "json_schema",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "vendor":   {"type": "string"},
+                    "total":    {"type": "number"},
+                    "currency": {"type": "string"},
+                },
+                "required": ["vendor", "total", "currency"],
+                "additionalProperties": False,
+            },
+        }
+    },
+)
+
+import json
+data = json.loads(next(b.text for b in response.content if b.type == "text"))</code></pre>
+  <p>Use this when the schema is generated at runtime, or in a language without a Pydantic equivalent.</p>
+
+  <h2>Designing a schema the model can fill in well</h2>
+  <p>Schema design is prompt engineering. The field names and descriptions are instructions.</p>
+  <pre><code>from enum import Enum
+from pydantic import BaseModel, Field
+
+class Category(str, Enum):
+    BILLING = "billing"
+    BUG = "bug"
+    FEATURE_REQUEST = "feature_request"
+    ACCOUNT = "account"
+    OTHER = "other"
+
+class TicketAnalysis(BaseModel):
+    category: Category
+    priority: int = Field(ge=1, le=4, description="1 = low, 4 = production outage")
+    needs_human: bool = Field(description="True if angry, threatening to leave, or data loss")
+    reason: str = Field(max_length=200, description="One sentence justifying the classification")
+    mentioned_features: list[str] = Field(default_factory=list)</code></pre>
+  <ul>
+    <li><strong>Enums beat free strings</strong> wherever the value set is known — no normalisation code, no
+        "Billing"/"billing"/"BILLING".</li>
+    <li><strong>Descriptions are read by the model.</strong> Use them to define what the field means; this is where the
+        precision goes.</li>
+    <li><strong>Name fields as their meaning</strong> — <code>needs_human</code>, not <code>flag2</code>.</li>
+    <li><strong>Nullable is honest.</strong> Give the model a way to say "not present" (<code>str | None</code>) rather
+        than forcing it to invent a value.</li>
+    <li><strong>Keep it flat and small.</strong> Deeply nested schemas are harder to fill correctly and cost more
+        tokens.</li>
+  </ul>
+
+  <h3>Ask for reasoning inside the schema</h3>
+  <pre><code>class Decision(BaseModel):
+    evidence: list[str] = Field(description="Quotes from the source supporting the decision")
+    reasoning: str = Field(description="Brief justification, written before deciding")
+    approved: bool</code></pre>
+  <p>Field order matters: fields are generated in order, so a reasoning field placed <em>before</em> the verdict lets the
+     model work before it commits. It also gives you something to audit when the verdict is wrong.</p>
+
+  <h2>Structured output versus tool calling</h2>
+  <table>
+    <tr><th>Use structured output</th><th>Use a tool (lesson 7)</th></tr>
+    <tr><td>You want data back from the model</td><td>You want the model to trigger an action</td></tr>
+    <tr><td>Extraction, classification, scoring, planning</td><td>Search, database writes, sending email, calculators</td></tr>
+    <tr><td>One response shape</td><td>The model chooses among several capabilities</td></tr>
+  </table>
+  <p>The mechanisms are related — both are schema-constrained — and they compose: a tool call with
+     <code>strict: True</code> guarantees the arguments validate against your schema.</p>
+  <pre><code>tools=[{
+    "name": "create_ticket",
+    "description": "Create a support ticket in the tracker",
+    "strict": True,
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title":    {"type": "string"},
+            "priority": {"type": "string", "enum": ["low", "medium", "high", "urgent"]},
+        },
+        "required": ["title", "priority"],
+        "additionalProperties": False,
+    },
+}]</code></pre>
+
+  <h2>What schemas do not guarantee</h2>
+  <div class="warn">
+    <strong>Valid is not correct</strong>
+    A schema guarantees the shape, never the truth. <code>{"total": 999.99}</code> is perfectly valid and may be the
+    wrong number. Structured output eliminates parsing bugs; it does not eliminate hallucination. You still need
+    grounding, validation and evaluation.
+  </div>
+  <p>Business validation belongs in your code, after the parse:</p>
+  <pre><code>def validate_invoice(invoice: Invoice, source_text: str) -> list[str]:
+    problems = []
+    if invoice.total &lt;= 0:
+        problems.append("total must be positive")
+    if str(invoice.total) not in source_text.replace(",", "."):
+        problems.append("total does not appear verbatim in the source")   # cheap anti-hallucination check
+    if invoice.currency not in {"EUR", "USD", "RON", "GBP"}:
+        problems.append(f"unexpected currency {invoice.currency}")
+    return problems</code></pre>
+
+  <h2>Repair loops</h2>
+  <p>When you cannot constrain generation — an older model, a provider without schema support, or business rules a
+     schema cannot express — validate and retry with the error message attached:</p>
+  <pre><code>from pydantic import ValidationError
+
+def extract(text: str, attempts: int = 3) -> Invoice:
+    messages = [{"role": "user", "content": PROMPT.format(text=text)}]
+
+    for attempt in range(attempts):
+        raw = call_model(messages)
+        try:
+            invoice = Invoice.model_validate_json(raw)
+        except ValidationError as e:
+            messages += [
+                {"role": "assistant", "content": raw},
+                {"role": "user", "content":
+                    f"That response failed validation:\n{e}\nReturn corrected JSON only."},
+            ]
+            continue
+
+        problems = validate_invoice(invoice, text)
+        if not problems:
+            return invoice
+        messages += [
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content": "Fix these problems and return JSON only:\n- " + "\n- ".join(problems)},
+        ]
+
+    raise ValueError(f"could not extract a valid invoice after {attempts} attempts")</code></pre>
+  <p>Cap the attempts, log how often repairs happen, and treat a rising repair rate as a signal that the prompt or the
+     schema needs work — not as a cost of doing business.</p>
+
+  <h2>Batch extraction, concretely</h2>
+  <pre><code>import asyncio
+from anthropic import AsyncAnthropic
+
+client = AsyncAnthropic()
+semaphore = asyncio.Semaphore(5)
+
+async def extract_one(doc: str) -> Invoice | None:
+    async with semaphore:
+        try:
+            response = await client.messages.parse(
+                model="claude-sonnet-5",           # cheaper tier is often plenty for extraction
+                max_tokens=2000,
+                messages=[{"role": "user", "content": doc}],
+                output_format=Invoice,
+            )
+            return response.parsed_output
+        except Exception as e:
+            log.warning("extraction failed: %s", e)
+            return None
+
+async def extract_all(docs: list[str]) -> list[Invoice]:
+    results = await asyncio.gather(*(extract_one(d) for d in docs))
+    return [r for r in results if r is not None]</code></pre>
+  <p>Note the model choice: extraction into a tight schema is one of the tasks where a cheaper model usually holds up.
+     Verify that claim on your data rather than trusting it.</p>
+
+  <h2>Where this shows up in the rest of the course</h2>
+  <ul>
+    <li><strong>RAG</strong> — an answer plus a list of citation ids you can verify (lesson 11).</li>
+    <li><strong>Agents</strong> — a plan as a list of typed steps (lesson 13).</li>
+    <li><strong>Evaluation</strong> — an LLM judge returning a score and a reason, not an essay (lesson 16).</li>
+    <li><strong>Routing</strong> — a cheap model returning one enum value that decides the pipeline (lesson 17).</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Define a Pydantic model for a CV (name, email, years of experience, skills, last three roles) and extract from
+          three real CVs in different formats.</li>
+      <li>Add an enum field and confirm the model never returns a value outside it.</li>
+      <li>Put a <code>reasoning</code> field before the verdict field and check whether decisions improve on ambiguous
+          inputs.</li>
+      <li>Write a validation function that catches at least one hallucination the schema cannot — for example a total
+          that does not appear in the source.</li>
+      <li>Implement the repair loop and log how many attempts each document needed across 20 documents.</li>
+      <li>Run the same extraction on a top-tier and a cheap model and compare accuracy and cost.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

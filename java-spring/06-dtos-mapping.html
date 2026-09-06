@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DTOs, layers and mapping — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="06-dtos-mapping.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>DTOs, layers and mapping</h1>
+  <p class="lead">Where code goes, and why exposing your database entities over HTTP is a mistake you only make
+     once.</p>
+
+  <h2>The three layers</h2>
+  <pre><code>HTTP request
+    ↓
+@RestController      web concerns: routing, status codes, DTOs, validation
+    ↓
+@Service             business rules, orchestration, transactions
+    ↓
+@Repository          persistence only: queries, saves
+    ↓
+database</code></pre>
+  <p>Dependencies point downward only. A repository must never call a service; a service must never know about
+     <code>HttpServletRequest</code>. That one rule keeps the business logic testable without a web server or a
+     database.</p>
+
+  <h3>What belongs where</h3>
+  <table>
+    <tr><th>Layer</th><th>Yes</th><th>No</th></tr>
+    <tr><td>Controller</td><td>Map request → DTO, call one service method, choose the status code</td>
+        <td>Business rules, entity objects, SQL, <code>@Transactional</code></td></tr>
+    <tr><td>Service</td><td>Rules, validation beyond format, coordinating repositories, transactions, events</td>
+        <td>HTTP types, JSON annotations</td></tr>
+    <tr><td>Repository</td><td>Queries and persistence</td><td>Business decisions</td></tr>
+  </table>
+
+  <h2>Why DTOs</h2>
+  <pre><code>@Entity
+public class User {
+    @Id private Long id;
+    private String email;
+    private String passwordHash;        // ← would you like this in your API response?
+    private String internalNotes;
+    private boolean fraudFlag;
+    @OneToMany private List&lt;Order&gt; orders;   // ← and every order, recursively?
+}
+
+@GetMapping("/{id}")
+public User get(@PathVariable Long id) { return repository.findById(id).orElseThrow(); }</code></pre>
+  <p>Four problems with returning the entity directly:</p>
+  <ol>
+    <li><strong>Leaks data</strong> — password hashes, internal flags, other people's information.</li>
+    <li><strong>Leaks structure</strong> — renaming a column now breaks every client.</li>
+    <li><strong>Serialisation surprises</strong> — lazy associations trigger extra queries or blow up with
+        <code>LazyInitializationException</code>; bidirectional relations recurse forever.</li>
+    <li><strong>Accepts too much</strong> — binding a request body straight onto an entity lets a caller set
+        <code>id</code>, <code>role</code> or <code>createdAt</code>.</li>
+  </ol>
+
+  <h3>The shape to use instead</h3>
+  <pre><code>// what the client may send
+public record CreateTaskRequest(
+        @NotBlank @Size(max = 200) String title,
+        @Size(max = 2000) String description,
+        @FutureOrPresent LocalDate dueDate) { }
+
+// what the client gets back
+public record TaskResponse(
+        Long id,
+        String title,
+        String description,
+        boolean done,
+        LocalDate dueDate,
+        Instant createdAt) {
+
+    public static TaskResponse from(Task task) {
+        return new TaskResponse(task.getId(), task.getTitle(), task.getDescription(),
+                                task.isDone(), task.getDueDate(), task.getCreatedAt());
+    }
+}</code></pre>
+  <p>Records are ideal here: immutable, concise, and Jackson handles them natively.</p>
+  <p>Keep separate request and response types. They diverge quickly — the request has no <code>id</code>, the response
+     has no <code>password</code> — and merging them produces a type full of fields that are meaningless half the
+     time.</p>
+
+  <h2>Mapping</h2>
+  <h3>By hand (start here)</h3>
+  <pre><code>@Service
+public class TaskService {
+
+    public TaskResponse create(CreateTaskRequest request) {
+        Task task = new Task();
+        task.setTitle(request.title());
+        task.setDescription(request.description());
+        task.setDueDate(request.dueDate());
+        task.setCreatedAt(Instant.now(clock));
+
+        return TaskResponse.from(repository.save(task));
+    }
+}</code></pre>
+  <p>Explicit, debuggable, no magic. For a handful of entities this is genuinely fine, and it is what you should do
+     while learning.</p>
+
+  <h3>MapStruct, when there are many</h3>
+  <pre><code>@Mapper(componentModel = "spring")
+public interface TaskMapper {
+    TaskResponse toResponse(Task task);
+    Task toEntity(CreateTaskRequest request);
+
+    @Mapping(target = "id", ignore = true)
+    void update(@MappingTarget Task task, UpdateTaskRequest request);
+}</code></pre>
+  <p>MapStruct generates the implementation at compile time — no reflection, and mistakes are compile errors. Prefer it
+     to runtime mappers like ModelMapper, which fail silently and at the worst moment.</p>
+
+  <h2>A service worth reading</h2>
+  <pre><code>@Service
+@Transactional(readOnly = true)
+public class TaskService {
+
+    private final TaskRepository repository;
+    private final Clock clock;
+
+    public TaskService(TaskRepository repository, Clock clock) {
+        this.repository = repository;
+        this.clock = clock;
+    }
+
+    public List&lt;TaskResponse&gt; findAll(Boolean done) {
+        List&lt;Task&gt; tasks = (done == null) ? repository.findAll() : repository.findByDone(done);
+        return tasks.stream().map(TaskResponse::from).toList();
+    }
+
+    public TaskResponse findById(Long id) {
+        return repository.findById(id)
+                .map(TaskResponse::from)
+                .orElseThrow(() -&gt; new TaskNotFoundException(id));
+    }
+
+    @Transactional
+    public TaskResponse complete(Long id) {
+        Task task = repository.findById(id).orElseThrow(() -&gt; new TaskNotFoundException(id));
+
+        if (task.isDone()) {
+            throw new TaskAlreadyCompletedException(id);      // a business rule, in the service
+        }
+        task.setDone(true);
+        task.setCompletedAt(Instant.now(clock));
+
+        return TaskResponse.from(task);       // no explicit save needed inside a transaction
+    }
+}</code></pre>
+  <p>Notice: the service speaks DTOs outward and entities inward, owns the rules, and never mentions HTTP.</p>
+
+  <h2>Where should validation live?</h2>
+  <ul>
+    <li><strong>Format and shape</strong> — <code>@NotBlank</code>, <code>@Email</code>, <code>@Size</code> — on the
+        request DTO, checked by <code>@Valid</code> in the controller. Cheap, declarative, returns 400.</li>
+    <li><strong>Business rules</strong> — "the due date must be after the project start", "a completed task cannot be
+        reopened" — in the service, as exceptions. These need other data to decide, so they cannot be annotations.</li>
+    <li><strong>Invariants</strong> — "an amount is never negative" — in the domain object's constructor, so the object
+        cannot exist in a broken state.</li>
+  </ul>
+
+  <h2>Package by feature</h2>
+  <pre><code>com.example.tasks
+├── task
+│   ├── TaskController.java
+│   ├── TaskService.java
+│   ├── TaskRepository.java
+│   ├── Task.java                 entity
+│   └── dto/
+│       ├── CreateTaskRequest.java
+│       └── TaskResponse.java
+├── user
+└── common
+    ├── GlobalExceptionHandler.java
+    └── config/</code></pre>
+  <p>Everything about tasks lives together, so a change touches one folder. This scales better than
+     <code>controller/</code>, <code>service/</code>, <code>repository/</code> packages, where every feature is smeared
+     across the tree. Either way, be consistent with whatever the codebase already does.</p>
+
+  <h2>Anti-patterns to avoid</h2>
+  <ul>
+    <li><strong>Anaemic controllers with fat everything else</strong> is fine; <strong>fat controllers</strong> are
+        not.</li>
+    <li><strong>Service calling service calling service</strong> in a deep chain — it usually means the boundaries are
+        wrong.</li>
+    <li><strong>Repository injected into a controller</strong> to "save a layer". The day you need a rule, it is in the
+        wrong place.</li>
+    <li><strong>One <code>TaskDto</code> reused for create, update and response</strong>, full of nulls.</li>
+    <li><strong>Static utility classes holding business logic</strong> — untestable and un-injectable.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Take the controller from lesson 5 and introduce <code>CreateTaskRequest</code>, <code>UpdateTaskRequest</code>
+          and <code>TaskResponse</code>.</li>
+      <li>Move every rule out of the controller into a service, leaving the controller three lines per method.</li>
+      <li>Add a field to your entity that must never be exposed and confirm it does not appear in the JSON.</li>
+      <li>Write a <code>from(Task)</code> factory on the response record, then try MapStruct and compare.</li>
+      <li>Reorganise the project by feature and note how many folders a "add a field to Task" change now touches.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

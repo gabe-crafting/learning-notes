@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operators and expressions — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="04-operators.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Operators and expressions</h1>
+  <p class="lead">Short lesson, high value: the symbols you will read thousands of times, plus the handful whose
+     behaviour surprises people.</p>
+
+  <h2>Arithmetic</h2>
+  <pre><code>int a = 17, b = 5;
+a + b   // 22
+a - b   // 12
+a * b   // 85
+a / b   // 3   integer division: the remainder is discarded
+a % b   // 2   modulo: the remainder</code></pre>
+  <p><code>%</code> is more useful than it looks: <code>n % 2 == 0</code> tests even, <code>i % list.size()</code> wraps
+     an index around, <code>seconds % 60</code> splits a duration.</p>
+  <p>Note that <code>%</code> keeps the sign of the left operand: <code>-7 % 3</code> is <code>-1</code>, not
+     <code>2</code>. If you need a non-negative result, use <code>Math.floorMod(-7, 3)</code>.</p>
+
+  <h2>Assignment and compound assignment</h2>
+  <pre><code>int x = 10;
+x += 5;    // x = x + 5  → 15
+x -= 3;    // 12
+x *= 2;    // 24
+x /= 4;    // 6
+x %= 4;    // 2</code></pre>
+  <p>Compound assignment hides a cast: <code>byte b = 10; b += 300;</code> compiles (and overflows) where
+     <code>b = b + 300;</code> would not.</p>
+
+  <h2>Increment and decrement</h2>
+  <pre><code>int i = 5;
+int p = i++;   // p = 5, i = 6   (post: use, then increment)
+int q = ++i;   // q = 7, i = 7   (pre: increment, then use)</code></pre>
+  <p>In a loop header the difference is irrelevant. Anywhere else, prefer a separate statement — clever one-liners
+     built on <code>i++</code> are a classic source of bugs.</p>
+
+  <h2>Comparison</h2>
+  <pre><code>a == b    // equal          (identity for references!)
+a != b    // not equal
+a &lt;  b    a &lt;= b    a &gt; b    a &gt;= b</code></pre>
+  <pre><code>String s1 = "hello";
+String s2 = "hel" + lo();          // built at runtime
+s1 == s2         // false — different objects
+s1.equals(s2)    // true  — same characters</code></pre>
+  <p>Use <code>==</code> for primitives and for <code>enum</code> constants and null checks; use <code>equals</code> for
+     everything else.</p>
+
+  <h2>Logical operators</h2>
+  <pre><code>&amp;&amp;   and    (short-circuits: right side not evaluated if left is false)
+||   or     (short-circuits: right side not evaluated if left is true)
+!    not
+^    exclusive or</code></pre>
+  <p>Short-circuiting is not just an optimisation — it is how you guard:</p>
+  <pre><code>if (user != null &amp;&amp; user.isActive()) { ... }     // safe
+if (user.isActive() &amp;&amp; user != null) { ... }     // NullPointerException</code></pre>
+  <p>The single-character forms <code>&amp;</code> and <code>|</code> also work on booleans but always evaluate both
+     sides. You will rarely want them.</p>
+
+  <h2>Ternary conditional</h2>
+  <pre><code>String label = count == 1 ? "item" : "items";
+int max = a &gt; b ? a : b;</code></pre>
+  <p>Good for a single small choice inside an expression. If you find yourself nesting ternaries, use an
+     <code>if</code>.</p>
+
+  <h2>Operator precedence</h2>
+  <p>From tightest to loosest, the part worth memorising:</p>
+  <table>
+    <tr><td>1</td><td><code>++ -- !</code> (unary), casts</td></tr>
+    <tr><td>2</td><td><code>* / %</code></td></tr>
+    <tr><td>3</td><td><code>+ -</code></td></tr>
+    <tr><td>4</td><td><code>&lt; &lt;= &gt; &gt;= instanceof</code></td></tr>
+    <tr><td>5</td><td><code>== !=</code></td></tr>
+    <tr><td>6</td><td><code>&amp;&amp;</code> then <code>||</code></td></tr>
+    <tr><td>7</td><td><code>? :</code> then <code>= += -= …</code></td></tr>
+  </table>
+  <pre><code>int r = 2 + 3 * 4;             // 14, not 20
+boolean ok = a &gt; 0 &amp;&amp; b &gt; 0 || c &gt; 0;   // (a&gt;0 &amp;&amp; b&gt;0) || c&gt;0</code></pre>
+  <p>When in doubt, add brackets. Nobody has ever been criticised in code review for brackets that made intent obvious.</p>
+
+  <h2>String concatenation with +</h2>
+  <pre><code>String s = "Total: " + 3 + 4;      // "Total: 34"   — left to right!
+String t = "Total: " + (3 + 4);    // "Total: 7"</code></pre>
+  <p>Once one operand is a <code>String</code>, <code>+</code> means concatenation and everything to the right is
+     converted to text.</p>
+
+  <h2>Bitwise operators</h2>
+  <p>Rare in business code, common in libraries, permissions and low-level work:</p>
+  <pre><code>&amp;    and          6 &amp; 3  == 2      (0110 &amp; 0011 = 0010)
+|    or           6 | 3  == 7
+^    xor          6 ^ 3  == 5
+~    not          ~6     == -7
+&lt;&lt;   shift left   1 &lt;&lt; 4 == 16       (multiply by 2^4)
+&gt;&gt;   shift right  16 &gt;&gt; 2 == 4        (sign-preserving)
+&gt;&gt;&gt;  unsigned shift right</code></pre>
+
+  <h2>instanceof and pattern matching</h2>
+  <pre><code>// classic
+if (obj instanceof String) {
+    String s = (String) obj;
+    System.out.println(s.length());
+}
+
+// Java 16+: pattern matching binds the variable for you
+if (obj instanceof String s &amp;&amp; s.length() &gt; 3) {
+    System.out.println(s.toUpperCase());
+}</code></pre>
+
+  <h2>Statements versus expressions</h2>
+  <p>An <strong>expression</strong> produces a value (<code>a + b</code>, <code>list.size()</code>,
+     <code>x &gt; 0 ? 1 : 0</code>). A <strong>statement</strong> does something (<code>int x = 5;</code>, an
+     <code>if</code>, a loop). Java is picky about which goes where, and the compiler error "not a statement" usually
+     means you wrote an expression on its own line.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Write <code>isLeapYear(int year)</code> using only <code>%</code>, <code>&amp;&amp;</code> and
+          <code>||</code>: divisible by 4, except centuries, unless divisible by 400.</li>
+      <li>Convert a total number of seconds into <code>h:mm:ss</code> using <code>/</code> and <code>%</code>.</li>
+      <li>Predict, then check in <code>jshell</code>: <code>1 + 2 + "3" + 4 + 5</code>.</li>
+      <li>Explain why <code>if (s != null &amp;&amp; s.isEmpty())</code> is safe but swapping the operands is not.</li>
+      <li>Write a check that a number is a power of two using a single bitwise expression.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

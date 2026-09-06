@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interfaces and abstract classes — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="11-interfaces.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Interfaces and abstract classes</h1>
+  <p class="lead">Interfaces are how Java code stays swappable and testable. If you understand this lesson, Spring will
+     make sense later.</p>
+
+  <h2>An interface is a contract</h2>
+  <pre><code>public interface PaymentProcessor {
+    boolean charge(String customerId, double amount);   // public abstract by default
+    void refund(String transactionId);
+}</code></pre>
+  <pre><code>public class StripeProcessor implements PaymentProcessor {
+    @Override
+    public boolean charge(String customerId, double amount) { ... }
+
+    @Override
+    public void refund(String transactionId) { ... }
+}
+
+public class FakeProcessor implements PaymentProcessor {   // for tests
+    @Override public boolean charge(String c, double a) { return true; }
+    @Override public void refund(String t) { }
+}</code></pre>
+  <p>A class must implement every method of every interface it declares, or be <code>abstract</code> itself.</p>
+
+  <h2>Why bother</h2>
+  <pre><code>public class CheckoutService {
+    private final PaymentProcessor processor;      // depends on the contract...
+
+    public CheckoutService(PaymentProcessor processor) {
+        this.processor = processor;                // ...not on any implementation
+    }
+
+    public void checkout(Order order) {
+        processor.charge(order.customerId(), order.total());
+    }
+}
+
+new CheckoutService(new StripeProcessor());   // production
+new CheckoutService(new FakeProcessor());     // test — no network, instant</code></pre>
+  <p>Three payoffs: you can swap implementations, you can test without the real dependency, and code that depends only
+     on interfaces does not recompile or break when an implementation changes. This is exactly what Spring automates
+     with dependency injection.</p>
+
+  <h2>Multiple interfaces</h2>
+  <pre><code>public interface Readable  { String read(); }
+public interface Writable  { void write(String data); }
+public interface Closeable { void close(); }
+
+public class FileHandler implements Readable, Writable, Closeable {
+    @Override public String read() { ... }
+    @Override public void write(String data) { ... }
+    @Override public void close() { ... }
+}</code></pre>
+  <p>One <code>extends</code>, many <code>implements</code>. Interfaces can also extend other interfaces, including
+     several at once.</p>
+
+  <h2>What an interface may contain</h2>
+  <pre><code>public interface Validator {
+
+    boolean isValid(String input);                   // abstract — the contract
+
+    default String describe() {                      // Java 8+: inherited implementation
+        return "Validator: " + getClass().getSimpleName();
+    }
+
+    static Validator notEmpty() {                    // static factory, called on the interface
+        return input -&gt; input != null &amp;&amp; !input.isBlank();
+    }
+
+    int MAX_LENGTH = 255;                            // implicitly public static final
+
+    private boolean helper(String s) { return s != null; }   // Java 9+: private helper
+}</code></pre>
+  <p><code>default</code> methods exist so a library can add a method to an interface without breaking every existing
+     implementation — that is how <code>Collection.stream()</code> was introduced. Use them sparingly in your own code.</p>
+
+  <h2>Interface versus abstract class</h2>
+  <table>
+    <tr><th></th><th>Interface</th><th>Abstract class</th></tr>
+    <tr><td>How many</td><td>A class can implement many</td><td>A class can extend only one</td></tr>
+    <tr><td>State</td><td>No instance fields (constants only)</td><td>Fields, including mutable ones</td></tr>
+    <tr><td>Constructors</td><td>None</td><td>Yes (called via <code>super</code>)</td></tr>
+    <tr><td>Methods</td><td>abstract, default, static, private</td><td>Anything, including protected helpers</td></tr>
+    <tr><td>Expresses</td><td>"can do" — a capability</td><td>"is a" — a partial implementation</td></tr>
+  </table>
+  <p>Practical guidance: <strong>start with an interface.</strong> Reach for an abstract class only when several
+     implementations genuinely share fields and code — and even then, consider putting the shared code in a separate
+     collaborator instead.</p>
+
+  <h2>Implementing standard interfaces</h2>
+  <h3>Comparable — natural ordering</h3>
+  <pre><code>public class Product implements Comparable&lt;Product&gt; {
+    private final String name;
+    private final double price;
+
+    @Override
+    public int compareTo(Product other) {
+        return Double.compare(this.price, other.price);   // negative, 0, positive
+    }
+}
+
+List&lt;Product&gt; products = new ArrayList&lt;&gt;(...);
+Collections.sort(products);        // uses compareTo
+products.sort(null);               // same thing</code></pre>
+
+  <h3>Comparator — any other ordering</h3>
+  <pre><code>products.sort(Comparator.comparing(Product::getName));
+products.sort(Comparator.comparingDouble(Product::getPrice).reversed());
+products.sort(Comparator.comparing(Product::getCategory)
+                        .thenComparing(Product::getName));</code></pre>
+
+  <h3>AutoCloseable — try-with-resources</h3>
+  <pre><code>public class Connection implements AutoCloseable {
+    @Override public void close() { System.out.println("closed"); }
+}
+
+try (Connection c = new Connection()) {
+    // use c
+}   // close() runs automatically, even if an exception is thrown</code></pre>
+
+  <h2>Functional interfaces</h2>
+  <p>An interface with exactly one abstract method can be implemented by a lambda — the basis of lesson 16.</p>
+  <pre><code>@FunctionalInterface
+public interface Transformer {
+    String transform(String input);
+}
+
+Transformer upper = s -&gt; s.toUpperCase();          // lambda
+Transformer trim  = String::strip;                 // method reference
+System.out.println(upper.transform("hello"));      // HELLO</code></pre>
+  <p>The standard library already provides the ones you usually need: <code>Function&lt;T,R&gt;</code>,
+     <code>Predicate&lt;T&gt;</code>, <code>Consumer&lt;T&gt;</code>, <code>Supplier&lt;T&gt;</code>,
+     <code>Runnable</code>, <code>Comparator&lt;T&gt;</code>.</p>
+
+  <h2>Anonymous classes</h2>
+  <pre><code>PaymentProcessor stub = new PaymentProcessor() {   // an unnamed one-off implementation
+    @Override public boolean charge(String c, double a) { return true; }
+    @Override public void refund(String t) { }
+};</code></pre>
+  <p>Still useful when an interface has more than one method (a lambda cannot be used then). For single-method
+     interfaces, a lambda is shorter and clearer.</p>
+
+  <h2>Programming to the interface</h2>
+  <pre><code>List&lt;String&gt; names = new ArrayList&lt;&gt;();     // declare the interface type
+Map&lt;String, Integer&gt; counts = new HashMap&lt;&gt;();
+
+public List&lt;Order&gt; findAll() { ... }        // return the interface
+public void process(Collection&lt;Order&gt; orders) { ... }  // accept the widest type you can use</code></pre>
+  <p>Widening the parameter type and narrowing the return type is the habit that keeps code flexible.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Define a <code>Notifier</code> interface with <code>send(String message)</code>, implement it as
+          <code>EmailNotifier</code> and <code>SmsNotifier</code>, and write a service that takes one in its
+          constructor.</li>
+      <li>Write a <code>Shape</code> interface with <code>area()</code> and a <code>default</code>
+          <code>describe()</code>, then implement two shapes.</li>
+      <li>Make a <code>Student</code> class <code>Comparable</code> by grade, then sort a list three different ways
+          with comparators.</li>
+      <li>Implement <code>AutoCloseable</code> on a fake resource and prove that <code>close()</code> runs when an
+          exception is thrown inside the try block.</li>
+      <li>Replace an anonymous class with a lambda in one of your examples and note what the compiler required.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

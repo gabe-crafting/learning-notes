@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Serving and deploying — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="20-serving-deploying.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Serving and deploying</h1>
+  <p class="lead">Turning your pipeline into a service: an API, streaming to the browser, background jobs, containers
+     and the operational details that AI workloads add to ordinary backend work.</p>
+
+  <h2>A FastAPI service</h2>
+  <pre><code>from fastapi import FastAPI, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+app = FastAPI(title="Docs Assistant")
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=2000)
+    conversation_id: str | None = None
+
+class SourceOut(BaseModel):
+    id: int
+    title: str
+    url: str | None
+    page: int | None
+
+class AskResponse(BaseModel):
+    answer: str
+    sources: list[SourceOut]
+    conversation_id: str
+
+@app.post("/api/ask", response_model=AskResponse)
+async def ask(request: AskRequest, user=Depends(current_user)) -&gt; AskResponse:
+    if not rate_limiter.allow(user.id):
+        raise HTTPException(429, "Too many requests")
+    result = await pipeline.answer(request.question, user=user)
+    return AskResponse(**result)
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}</code></pre>
+  <p>Nothing here is AI-specific except the pipeline call. Validation at the edge, auth as a dependency, rate limiting,
+     a health endpoint — the same service design you would write for anything else.</p>
+
+  <h2>Streaming to the browser</h2>
+  <p>Server-sent events are the simplest transport: one-directional, plain HTTP, reconnects for free. Use WebSockets
+     only if you need the client to talk back mid-stream.</p>
+  <pre><code>import json
+from anthropic import AsyncAnthropic
+
+client = AsyncAnthropic()
+
+@app.post("/api/ask/stream")
+async def ask_stream(request: AskRequest, user=Depends(current_user)):
+
+    async def events():
+        sources = await retrieve(request.question, user=user)
+        # send sources first so the UI can render citations while text arrives
+        yield f"event: sources\ndata: {json.dumps([s.dict() for s in sources])}\n\n"
+
+        try:
+            async with client.messages.stream(
+                model="claude-opus-5",
+                max_tokens=2000,
+                system=SYSTEM,
+                messages=build_messages(request.question, sources),
+            ) as stream:
+                async for text in stream.text_stream:
+                    yield f"event: token\ndata: {json.dumps({'text': text})}\n\n"
+
+                final = await stream.get_final_message()
+                usage = {"input": final.usage.input_tokens, "output": final.usage.output_tokens}
+                yield f"event: done\ndata: {json.dumps({'usage': usage})}\n\n"
+        except Exception as e:
+            log.exception("stream failed")
+            yield f"event: error\ndata: {json.dumps({'message': 'Generation failed'})}\n\n"
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )</code></pre>
+  <pre><code>// browser
+const response = await fetch("/api/ask/stream", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ question }),
+});
+
+const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+let buffer = "";
+while (true) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  buffer += value;
+  const frames = buffer.split("\n\n");
+  buffer = frames.pop() ?? "";
+  for (const frame of frames) handleEvent(parseSse(frame));
+}</code></pre>
+  <div class="warn">
+    <strong>Proxies buffer streams</strong>
+    nginx, some load balancers and some CDNs will happily collect your entire stream and deliver it in one lump,
+    silently undoing the feature. Disable buffering for the streaming route (<code>proxy_buffering off</code>,
+    <code>X-Accel-Buffering: no</code>) and verify in the deployed environment, not just locally.
+  </div>
+  <p>If your frontend is TypeScript, the Vercel AI SDK handles this transport plus React hooks for streamed messages and
+     tool calls — worth using rather than hand-rolling, especially if the UI is the part you enjoy.</p>
+
+  <h2>Long-running work belongs in a queue</h2>
+  <pre><code>@app.post("/api/documents", status_code=202)
+async def upload(file: UploadFile, user=Depends(current_user)):
+    document_id = await storage.save(file, tenant=user.tenant)
+    await queue.enqueue("ingest_document", document_id=document_id)   # returns immediately
+    return {"document_id": document_id, "status": "processing"}
+
+@app.get("/api/documents/{document_id}")
+async def status(document_id: str):
+    return await jobs.status(document_id)     # queued | processing | ready | failed</code></pre>
+  <p>Ingestion, batch extraction and multi-minute agent runs must not sit inside an HTTP request — they blow past
+     timeouts and they retry badly. Use Celery, RQ, Arq, or your cloud's queue; report progress through a status
+     endpoint or a websocket.</p>
+
+  <h2>Persisting conversations</h2>
+  <pre><code>create table conversations (
+    id          uuid primary key,
+    user_id     text not null,
+    tenant      text not null,
+    title       text,
+    summary     text,
+    created_at  timestamptz not null default now()
+);
+
+create table messages (
+    id               bigserial primary key,
+    conversation_id  uuid not null references conversations (id) on delete cascade,
+    role             text not null,
+    content          jsonb not null,        -- content blocks, not a plain string
+    model            text,
+    input_tokens     int,
+    output_tokens    int,
+    cost_usd         numeric(10,6),
+    trace_id         text,
+    created_at       timestamptz not null default now()
+);
+create index on messages (conversation_id, created_at);</code></pre>
+  <p>Store content as blocks rather than a flattened string: tool calls and reasoning blocks have to be replayed
+     verbatim to continue a conversation, and flattening them loses the ability to resume. Keeping tokens, cost and
+     trace id per message is what makes lesson 17's queries possible.</p>
+
+  <h2>Containerising</h2>
+  <pre><code>FROM python:3.12-slim AS base
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+
+COPY pyproject.toml uv.lock ./
+RUN pip install uv &amp;&amp; uv sync --frozen --no-dev
+
+COPY src/ src/
+
+RUN useradd --create-home app
+USER app
+
+EXPOSE 8000
+HEALTHCHECK CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+CMD ["uv", "run", "uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]</code></pre>
+  <pre><code>services:
+  api:
+    build: .
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DATABASE_URL: postgresql://app:app@db:5432/app
+    depends_on: [db, redis]
+    ports: ["8000:8000"]
+
+  worker:
+    build: .
+    command: uv run arq app.jobs.WorkerSettings
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DATABASE_URL: postgresql://app:app@db:5432/app
+    depends_on: [db, redis]
+
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+
+  redis:
+    image: redis:7
+
+volumes: { pgdata: {} }</code></pre>
+  <p>Note that the API and the worker are the same image with a different command — the standard shape, and it keeps
+     dependencies identical between them.</p>
+
+  <h2>Configuration and secrets</h2>
+  <pre><code>from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    anthropic_api_key: str
+    database_url: str
+    model_default: str = "claude-opus-5"
+    model_cheap: str = "claude-haiku-4-5"
+    max_cost_per_request: float = 0.50
+    embedding_model: str = "BAAI/bge-m3"
+    log_prompts: bool = False
+
+    class Config:
+        env_file = ".env"
+
+settings = Settings()      # fails loudly at startup if a required value is missing</code></pre>
+  <p>Keys come from the environment, injected by the platform. Never in the image, never in git. If one leaks, rotate
+     it — deleting the commit is not enough.</p>
+
+  <h2>Scaling shape</h2>
+  <ul>
+    <li><strong>Your service is I/O bound</strong>, waiting on the model. Async workers handle high concurrency on
+        modest hardware — this is not a CPU problem.</li>
+    <li><strong>The provider's rate limit is your real ceiling.</strong> Ten instances share one account limit; scaling
+        out does not raise it. Queue and shed load rather than hammering.</li>
+    <li><strong>Deploy where it makes sense.</strong> A container platform (Cloud Run, Fly, Render, Railway, ECS,
+        Kubernetes) is fine. Serverless functions fit awkwardly with streaming and long runs — check the timeout and
+        streaming support before committing.</li>
+    <li><strong>Keep model calls out of the request path</strong> whenever the user is not waiting on them.</li>
+  </ul>
+
+  <h2>Pre-launch checklist</h2>
+  <table>
+    <tr><td>Auth on every endpoint; rate limits per user</td></tr>
+    <tr><td>Input size caps; <code>max_tokens</code> caps; agent iteration and cost budgets</td></tr>
+    <tr><td>Retrieval filtered by permissions, with a test proving it</td></tr>
+    <tr><td>Timeouts and retries on every provider call; graceful degradation when it fails</td></tr>
+    <tr><td>Structured logging with tokens, cost, latency and trace ids</td></tr>
+    <tr><td>Alerts on error rate, p95 latency and daily spend</td></tr>
+    <tr><td>Eval suite passing, with the numbers recorded</td></tr>
+    <tr><td>Adversarial suite passing (lesson 18)</td></tr>
+    <tr><td>Secrets from the environment; nothing sensitive in logs</td></tr>
+    <tr><td>Migrations for the database; a documented way to re-index the corpus</td></tr>
+    <tr><td>A kill switch, and a rollback plan</td></tr>
+    <tr><td>A README a stranger can follow to run it</td></tr>
+  </table>
+
+  <h2>After launch</h2>
+  <ul>
+    <li>Read real conversations weekly. Nothing else tells you as much.</li>
+    <li>Feed failures into the eval set; that is how the system improves over months.</li>
+    <li>Watch cost daily for the first weeks — usage patterns will surprise you.</li>
+    <li>Pin model versions where the provider allows it, test upgrades against your evals, then move deliberately.</li>
+    <li>Re-read your prompts when you change models (lesson 5).</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Wrap your RAG pipeline in FastAPI with validation, auth and rate limiting.</li>
+      <li>Add a streaming endpoint and a minimal HTML page that renders tokens as they arrive, with citations shown
+          first.</li>
+      <li>Move ingestion into a background worker with a status endpoint.</li>
+      <li>Persist conversations, and prove you can resume one after a restart.</li>
+      <li>Containerise the whole thing with Docker Compose, including Postgres with pgvector.</li>
+      <li>Deploy it somewhere with a public URL and hit the health endpoint from your phone.</li>
+      <li>Walk the pre-launch checklist and fix every row you cannot honestly tick.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

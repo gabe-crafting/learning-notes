@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Concurrency basics — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="19-concurrency.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Concurrency basics</h1>
+  <p class="lead">You will rarely start threads by hand as a junior — but your Spring controllers run on many threads at
+     once, so understanding shared state is not optional.</p>
+
+  <h2>Why this matters even if you never write a thread</h2>
+  <p>A web server handles each request on a thread from a pool. Every <code>@Service</code> bean is shared by all of
+     them. If a service keeps mutable state in a field, two requests can corrupt it. Most concurrency bugs juniors ship
+     are exactly this: <strong>state where it should not be</strong>.</p>
+
+  <h2>Threads</h2>
+  <pre><code>Thread t = new Thread(() -&gt; System.out.println("running in " + Thread.currentThread().getName()));
+t.start();          // starts a new thread — calling t.run() would just run it here
+t.join();           // wait for it to finish
+
+Thread.sleep(1000); // pause the current thread, throws InterruptedException</code></pre>
+  <p>Threads are expensive (about 1 MB of stack each). Do not create them per task — use a pool.</p>
+
+  <h2>Executors: the practical API</h2>
+  <pre><code>ExecutorService pool = Executors.newFixedThreadPool(4);
+
+pool.submit(() -&gt; doWork());                       // fire and forget
+
+Future&lt;Integer&gt; future = pool.submit(() -&gt; compute());
+Integer result = future.get();                     // blocks until ready
+
+List&lt;Future&lt;String&gt;&gt; results = pool.invokeAll(tasks);
+
+pool.shutdown();                                   // no new tasks; finish the queue
+pool.awaitTermination(30, TimeUnit.SECONDS);</code></pre>
+  <pre><code>// Java 21: a thread per task, but virtual threads — cheap enough for millions
+try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+    for (var url : urls) {
+        executor.submit(() -&gt; fetch(url));
+    }
+}   // close() waits for all tasks</code></pre>
+  <p>Virtual threads (Java 21) make blocking I/O cheap again, which is why Spring Boot 3.2+ can run every request on
+     one.</p>
+
+  <h2>The race condition</h2>
+  <pre><code>class Counter {
+    private int count = 0;
+    public void increment() { count++; }     // NOT atomic: read, add, write
+    public int get() { return count; }
+}
+
+Counter c = new Counter();
+// 1000 increments from each of 10 threads
+// expected 10000, actual: something less, differently each run</code></pre>
+  <p><code>count++</code> is three operations. Two threads can read the same value, both add one, and both write back
+     the same result — one increment vanishes.</p>
+
+  <h3>Fixes, from best to heaviest</h3>
+  <pre><code>// 1. Do not share mutable state at all — the best fix
+//    local variables are per-thread and always safe
+
+// 2. Atomic types for simple counters
+AtomicInteger count = new AtomicInteger();
+count.incrementAndGet();
+count.addAndGet(5);
+count.compareAndSet(expected, updated);
+
+// 3. Concurrent collections
+Map&lt;String, Integer&gt; map = new ConcurrentHashMap&lt;&gt;();
+map.merge(key, 1, Integer::sum);            // atomic
+
+// 4. synchronized — one thread at a time
+public synchronized void increment() { count++; }
+
+private final Object lock = new Object();
+void update() {
+    synchronized (lock) { ... }             // narrower critical section
+}
+
+// 5. Explicit locks when you need timeouts or fairness
+private final ReentrantLock lock = new ReentrantLock();
+lock.lock();
+try { ... } finally { lock.unlock(); }      // ALWAYS unlock in finally</code></pre>
+
+  <h2>volatile and visibility</h2>
+  <pre><code>private volatile boolean running = true;     // writes are visible to other threads immediately
+
+public void stop() { running = false; }
+public void run()  { while (running) { ... } }   // without volatile this may loop forever</code></pre>
+  <p><code>volatile</code> guarantees visibility, not atomicity. It fixes the flag above; it does not fix
+     <code>count++</code>.</p>
+
+  <h2>Immutability is the real answer</h2>
+  <pre><code>public record Money(String currency, BigDecimal amount) { }   // immutable = thread-safe by construction</code></pre>
+  <p>An object that cannot change cannot be corrupted by concurrent access. Records, <code>List.of(...)</code>,
+     <code>String</code> and <code>java.time</code> types are all safe to share freely. Design for that first, reach for
+     locks last.</p>
+
+  <h2>CompletableFuture</h2>
+  <pre><code>CompletableFuture&lt;String&gt; future = CompletableFuture
+        .supplyAsync(() -&gt; fetchUser(id))               // runs on the common pool
+        .thenApply(User::name)                           // transform
+        .thenCompose(name -&gt; lookupProfileAsync(name))   // chain another async call
+        .exceptionally(ex -&gt; "unknown");                 // handle failure
+
+String result = future.join();                            // block for the result
+
+// run several in parallel and wait for all
+CompletableFuture.allOf(f1, f2, f3).join();</code></pre>
+  <p>Useful when a request needs three independent downstream calls: issue them together instead of one after another.</p>
+
+  <h2>Deadlock</h2>
+  <pre><code>// thread 1: synchronized (a) { synchronized (b) { ... } }
+// thread 2: synchronized (b) { synchronized (a) { ... } }
+// both wait forever</code></pre>
+  <p>Prevention: acquire locks in a consistent global order, hold them for as short a time as possible, and prefer
+     lock-free structures.</p>
+
+  <h2>Rules of thumb for application code</h2>
+  <ul>
+    <li>Spring beans (<code>@Service</code>, <code>@Repository</code>, <code>@Component</code>) are singletons shared by
+        all requests. Keep their fields <code>final</code> and immutable — dependencies only, never per-request
+        state.</li>
+    <li>Pass per-request data as method parameters.</li>
+    <li>Use <code>ConcurrentHashMap</code> for shared caches; <code>HashMap</code> corrupts under concurrent writes and
+        has historically been able to spin forever.</li>
+    <li>Do not call <code>Thread.sleep</code> in request handling to "wait for" something.</li>
+    <li>If you find yourself writing <code>synchronized</code> in a controller or service, stop and ask why state is
+        shared at all.</li>
+    <li>Database transactions, not Java locks, are how you coordinate across multiple application instances.</li>
+  </ul>
+
+  <h2>Debugging concurrency</h2>
+  <pre><code>jps                       # list running JVMs and their pids
+jstack &lt;pid&gt;              # dump all thread stacks — shows deadlocks and stuck threads
+log.info("handled on {}", Thread.currentThread().getName());</code></pre>
+  <p>Concurrency bugs are timing-dependent, so they hide during testing and appear under load. Run a suspect test in a
+     loop hundreds of times before believing it is fixed.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Write the broken counter: 10 threads × 1000 increments. Run it five times and record the results.</li>
+      <li>Fix it three ways — <code>AtomicInteger</code>, <code>synchronized</code>, and by not sharing state — and
+          compare.</li>
+      <li>Use a fixed thread pool to fetch five URLs (or simulate with <code>Thread.sleep</code>) and measure the total
+          time against doing it sequentially.</li>
+      <li>Chain two <code>CompletableFuture</code>s where the second depends on the first, and add an
+          <code>exceptionally</code> handler.</li>
+      <li>Write a deliberate deadlock, take a <code>jstack</code> dump, and find where it says "Found one Java-level
+          deadlock".</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

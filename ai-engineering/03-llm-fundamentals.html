@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How LLMs actually behave — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="03-llm-fundamentals.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>How LLMs actually behave</h1>
+  <p class="lead">Not the maths — the operational model. Enough understanding to predict what a model will do, why it
+     costs what it costs, and why it sometimes invents things.</p>
+
+  <h2>The one-sentence version</h2>
+  <p>A large language model takes a sequence of tokens and predicts a probability distribution over the next token, over
+     and over, until it decides to stop. Everything else — chat, reasoning, tool calls, JSON — is that mechanism wrapped
+     in structure.</p>
+
+  <h2>Tokens</h2>
+  <p>Models do not see characters or words. Text is split into <strong>tokens</strong>: common words are one token, rare
+     words split into pieces, and whitespace and punctuation carry their own.</p>
+  <pre><code>"AI engineering"        →  ~3 tokens
+"unbelievability"       →  ~5 tokens
+"def chunk_text(text):" →  ~7 tokens
+Romanian, Chinese, code →  more tokens per character than English prose
+
+rule of thumb (English): 1 token ≈ 4 characters ≈ 0.75 words
+                         1,000 words ≈ 1,300–1,500 tokens</code></pre>
+  <p>Tokens are the unit of billing, of the context limit, and of latency. Everything you care about operationally is
+     measured in them.</p>
+  <div class="warn">
+    <strong>Do not estimate tokens with another provider's tokenizer</strong>
+    Every model family tokenizes differently. Using OpenAI's <code>tiktoken</code> to estimate Claude usage undercounts
+    substantially, and more so on code and non-English text. Use the provider's own counting endpoint — for Claude,
+    <code>client.messages.count_tokens(model=..., messages=...)</code>, which is free and exact for that model.
+  </div>
+
+  <h2>The context window</h2>
+  <p>The context window is the maximum number of tokens the model can consider at once — your system prompt, the whole
+     conversation, retrieved documents, tool definitions, tool results, and the response it is generating, all
+     together.</p>
+  <pre><code>context window = system prompt
+               + conversation history
+               + retrieved context / documents
+               + tool definitions and tool results
+               + the output being generated (max_tokens)</code></pre>
+  <p>Current frontier models offer very large windows (Claude Opus 5 and Sonnet 5: 1M tokens; Claude Haiku 4.5: 200K).
+     That does not mean you should fill them:</p>
+  <ul>
+    <li><strong>You pay per input token, every single call.</strong> A stuffed context is a permanent tax on every
+        request in the conversation.</li>
+    <li><strong>More context is slower.</strong></li>
+    <li><strong>Irrelevant context degrades answers.</strong> Retrieval that dumps twenty mediocre chunks in usually
+        produces a worse answer than three good ones. This is the single most common RAG failure, and lesson 12 is
+        largely about it.</li>
+  </ul>
+  <p>"Context engineering" — deciding what deserves a place in the window — is a real skill, and a better use of your
+     time than shaving words off a prompt.</p>
+
+  <h2>The API is stateless</h2>
+  <pre><code>turn 1:  [user: "My name is Ana"]
+turn 2:  [user: "My name is Ana"] [assistant: "Hello Ana"] [user: "What is my name?"]</code></pre>
+  <p>The model remembers nothing between calls. "Memory" in a chat product means <em>you</em> resend the history each
+     time, or store a summary and resend that. This is why long conversations get progressively more expensive, and why
+     lesson 14 covers memory strategies.</p>
+
+  <h2>Sampling: why answers vary</h2>
+  <p>At each step the model has a probability distribution over next tokens, and sampling decides how to pick from it.
+     Classic knobs, which you will meet across providers:</p>
+  <table>
+    <tr><td><code>temperature</code></td><td>0 makes the choice near-deterministic; higher values flatten the
+        distribution and increase variety.</td></tr>
+    <tr><td><code>top_p</code> (nucleus)</td><td>Only sample from the smallest set of tokens whose probabilities sum to
+        p.</td></tr>
+    <tr><td><code>top_k</code></td><td>Only sample from the k most likely tokens.</td></tr>
+  </table>
+  <div class="note">
+    <strong>A concrete example of API drift</strong>
+    On current Claude models (Opus 5, Sonnet 5, the 4.6+ family) these sampling parameters have been <em>removed</em> —
+    sending <code>temperature</code> returns a 400. The knob that replaced them is
+    <code>output_config: {"effort": "low"|"medium"|"high"|"xhigh"|"max"}</code>, which trades thoroughness against token
+    spend. Other providers still expose temperature. The general lesson: learn the concept, then check the reference for
+    the model you are actually calling.
+  </div>
+  <p>Even with everything pinned, outputs are not guaranteed to be byte-identical across calls — batching and hardware
+     nondeterminism see to that. Design as if every call may differ, because it may.</p>
+
+  <h2>Reasoning / thinking modes</h2>
+  <p>Modern models can spend tokens on internal reasoning before answering, which materially improves hard tasks —
+     multi-step logic, code, planning, careful extraction. On Claude this is adaptive thinking, and it is on by default
+     on Opus 5:</p>
+  <pre><code>response = client.messages.create(
+    model="claude-opus-5",
+    max_tokens=16000,
+    thinking={"type": "adaptive", "display": "summarized"},
+    output_config={"effort": "high"},   # low | medium | high | xhigh | max
+    messages=[{"role": "user", "content": "..."}],
+)</code></pre>
+  <p>Reasoning tokens are billed like output tokens, so this is a quality/cost dial. Use higher effort on hard,
+     low-volume work; use lower effort for classification, routing and high-volume paths where it buys nothing. Measure
+     rather than assume — lesson 16.</p>
+
+  <h2>Why models hallucinate</h2>
+  <p>The model is producing a plausible continuation, not looking anything up. If it does not know, "plausible" and
+     "true" diverge — and the output is just as fluent either way. Fluency is not evidence.</p>
+  <p>Practical mitigations, in order of effectiveness:</p>
+  <ol>
+    <li><strong>Give it the facts</strong> (retrieval) instead of relying on what it absorbed in training.</li>
+    <li><strong>Demand citations</strong> and verify they exist in the source — a check you can automate.</li>
+    <li><strong>Give it an exit</strong>: "If the context does not contain the answer, say you do not know."</li>
+    <li><strong>Constrain the output</strong> to a schema or an enum, so free invention has nowhere to go.</li>
+    <li><strong>Validate mechanically</strong> — does that order id exist, does that URL resolve, does that number add
+        up.</li>
+    <li><strong>Keep a human in the loop</strong> wherever a wrong answer is expensive.</li>
+  </ol>
+  <p>Also remember the training cutoff: models know nothing about events after it, and asking about recent things is a
+     reliable way to get confident fiction. Use search or retrieval for anything current.</p>
+
+  <h2>Choosing a model</h2>
+  <p>Providers ship tiers, and the tiering is more useful than the branding. As a current example, the Claude family:</p>
+  <table>
+    <tr><th>Model</th><th>Model ID</th><th>Context</th><th>Input $/1M</th><th>Output $/1M</th></tr>
+    <tr><td>Claude Opus 5</td><td><code>claude-opus-5</code></td><td>1M</td><td>$5.00</td><td>$25.00</td></tr>
+    <tr><td>Claude Sonnet 5</td><td><code>claude-sonnet-5</code></td><td>1M</td><td>$2.00</td><td>$10.00</td></tr>
+    <tr><td>Claude Haiku 4.5</td><td><code>claude-haiku-4-5</code></td><td>200K</td><td>$1.00</td><td>$5.00</td></tr>
+  </table>
+  <p>Output tokens cost several times input tokens — everywhere, not just here. That single fact drives a lot of design:
+     verbose formats are expensive, and asking for JSON with short field names genuinely saves money at volume.</p>
+  <p>How to choose in practice:</p>
+  <ul>
+    <li>Prototype on the most capable model, so you learn whether the task is possible at all.</li>
+    <li>Then try to move high-volume paths down a tier and <em>measure</em> whether quality holds. Often it does.</li>
+    <li>Route by difficulty: a cheap model for classification and routing, the strong one for the hard step.</li>
+    <li>Judge cost per completed task, not per call. A cheap model that needs three attempts is not cheap.</li>
+  </ul>
+
+  <h2>Latency</h2>
+  <pre><code>total latency ≈ queue + prompt processing (input tokens)
+                      + generation (output tokens × time per token)</code></pre>
+  <p>Output length dominates. Consequences: stream the response so the user sees the first token quickly; cap
+     <code>max_tokens</code> to something sane; prefer concise output formats; and do independent calls concurrently
+     rather than in sequence. A perceived-fast product is mostly streaming plus not making the user wait on work that
+     could have happened in parallel.</p>
+
+  <h2>Multimodality and other capabilities</h2>
+  <p>Current models accept images and PDFs alongside text, which quietly solves a lot of document work — you can hand a
+     scanned invoice to the model directly instead of running OCR first. Providers also offer server-side tools (web
+     search, code execution), batch endpoints at reduced cost for non-urgent work, and prompt caching. Know which of
+     these exist before you build your own version of one.</p>
+
+  <h2>Vocabulary you need for interviews</h2>
+  <table>
+    <tr><td><strong>Token</strong></td><td>The unit of text the model processes and you are billed for.</td></tr>
+    <tr><td><strong>Context window</strong></td><td>Maximum tokens per request, input plus output.</td></tr>
+    <tr><td><strong>Prompt / completion</strong></td><td>What you send; what it generates.</td></tr>
+    <tr><td><strong>System prompt</strong></td><td>Instructions that frame the whole conversation.</td></tr>
+    <tr><td><strong>Few-shot</strong></td><td>Including examples in the prompt to demonstrate the task.</td></tr>
+    <tr><td><strong>Chain of thought</strong></td><td>Reasoning step by step before answering.</td></tr>
+    <tr><td><strong>Hallucination</strong></td><td>Fluent output that is not true.</td></tr>
+    <tr><td><strong>Grounding</strong></td><td>Supplying source material so answers are based on facts.</td></tr>
+    <tr><td><strong>RAG</strong></td><td>Retrieval-augmented generation: search first, then answer.</td></tr>
+    <tr><td><strong>Fine-tuning</strong></td><td>Further training on your data to change behaviour (lesson 19).</td></tr>
+    <tr><td><strong>Distillation / quantisation</strong></td><td>Making models smaller or cheaper to run.</td></tr>
+  </table>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Count the tokens in a 2,000-word document with the provider's counting endpoint. Compute what it would cost
+          to send it on every request in a 20-turn conversation.</li>
+      <li>Ask a model a question about something that happened last month, without giving it search or context. Note
+          how the wrong answer is phrased exactly like a right one.</li>
+      <li>Run the same prompt five times. Diff the answers. Then decide what that means for testing.</li>
+      <li>Take one task and run it on a top-tier and a cheap model, ten inputs each. Write down where quality actually
+          differed — you may be surprised how rarely it does.</li>
+      <li>Write a one-paragraph explanation of hallucination for a non-technical stakeholder who asks "can we just tell
+          it not to make things up?"</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

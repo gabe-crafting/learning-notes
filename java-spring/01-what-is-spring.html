@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What Spring is and why it exists — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="01-what-is-spring.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>What Spring is and why it exists</h1>
+  <p class="lead">Before any annotation: the problem Spring solves, and the one idea the whole framework is built
+     on.</p>
+
+  <h2>The problem</h2>
+  <p>Write a service by hand and you spend most of your time wiring rather than solving the business problem:</p>
+  <pre><code>public class OrderController {
+    private final OrderService service =
+        new OrderService(
+            new JdbcOrderRepository(
+                new HikariDataSource(readConfigSomehow())),
+            new StripePaymentGateway(System.getenv("STRIPE_KEY")),
+            new SmtpEmailSender("smtp.example.com", 587));
+}</code></pre>
+  <p>Every class knows how to construct its dependencies. Change the database and you edit twenty files. Test the
+     controller and you need a real database and a real payment provider. Add a second thing that needs the same
+     <code>DataSource</code> and you have two connection pools.</p>
+
+  <h2>Inversion of control</h2>
+  <p>Spring turns it around: a class <em>declares</em> what it needs, and something else supplies it.</p>
+  <pre><code>@Service
+public class OrderService {
+
+    private final OrderRepository repository;
+    private final PaymentGateway gateway;
+
+    public OrderService(OrderRepository repository, PaymentGateway gateway) {
+        this.repository = repository;      // Spring passes these in
+        this.gateway = gateway;
+    }
+}</code></pre>
+  <p>That is <strong>dependency injection</strong>, and it is the whole trick. The class no longer decides which
+     implementation it gets, so:</p>
+  <ul>
+    <li>Swapping an implementation is a configuration change, not a code change.</li>
+    <li>Testing means passing a mock into the constructor — no framework required.</li>
+    <li>One shared instance is created once and reused, instead of each class making its own.</li>
+  </ul>
+
+  <h2>The application context</h2>
+  <p>At startup Spring builds an <strong>application context</strong>: a registry of objects it manages, called
+     <strong>beans</strong>. It scans your packages for annotated classes, works out the dependency graph, constructs
+     everything in the right order, and hands each object its collaborators.</p>
+  <pre><code>Startup:
+  scan com.example.**
+  found: OrderController, OrderService, JdbcOrderRepository, StripeGateway
+  OrderService needs OrderRepository  → inject JdbcOrderRepository
+  OrderController needs OrderService  → inject OrderService
+  context ready — 4 beans</code></pre>
+  <p>Everything else Spring does — transactions, security, HTTP endpoints, scheduling — is built on top of this by
+     wrapping beans in extra behaviour (a proxy) as they are created.</p>
+
+  <h2>Spring versus Spring Boot</h2>
+  <table>
+    <tr><th>Spring Framework</th><th>Spring Boot</th></tr>
+    <tr><td>The core: DI container, AOP, web MVC, transactions</td><td>A layer on top that configures the framework for
+        you</td></tr>
+    <tr><td>Historically configured with a great deal of XML</td><td>Convention over configuration; sensible defaults
+        you can override</td></tr>
+    <tr><td>Deployed into an external application server</td><td>Embedded server, one runnable jar</td></tr>
+  </table>
+  <p>Nobody starts a new project with plain Spring today. "Learning Spring" in practice means learning Spring Boot,
+     which is what the rest of this course does.</p>
+
+  <h3>What Boot actually does</h3>
+  <ul>
+    <li><strong>Starters</strong> — one dependency (<code>spring-boot-starter-web</code>) pulls in a consistent set of
+        libraries with versions that work together.</li>
+    <li><strong>Auto-configuration</strong> — it inspects the classpath and configures what it finds. An H2 driver
+        present and no <code>DataSource</code> defined? It creates one. You define your own? It backs off.</li>
+    <li><strong>Embedded server</strong> — Tomcat runs inside your jar; <code>java -jar app.jar</code> starts a web
+        service.</li>
+    <li><strong>Externalised configuration</strong> — <code>application.yml</code>, environment variables, profiles.</li>
+    <li><strong>Actuator</strong> — health checks and metrics endpoints for free.</li>
+  </ul>
+
+  <h2>The ecosystem you will meet</h2>
+  <table>
+    <tr><td><strong>Spring Boot</strong></td><td>Starters, auto-configuration, the runtime</td></tr>
+    <tr><td><strong>Spring MVC</strong></td><td>The servlet-based web layer: <code>@RestController</code> and
+        friends</td></tr>
+    <tr><td><strong>Spring Data JPA</strong></td><td>Repositories over a relational database</td></tr>
+    <tr><td><strong>Spring Security</strong></td><td>Authentication and authorisation</td></tr>
+    <tr><td><strong>Spring Test</strong></td><td>Test slices, mock MVC, context caching</td></tr>
+    <tr><td><strong>Spring WebFlux</strong></td><td>The reactive alternative to MVC — do not start here</td></tr>
+    <tr><td><strong>Spring Cloud</strong></td><td>Microservice concerns: config server, gateway, resilience</td></tr>
+  </table>
+
+  <h2>Aspect-oriented programming, in one paragraph</h2>
+  <p>Some concerns — transactions, security checks, caching, metrics — cut across many methods. Rather than repeating
+     them, Spring wraps your bean in a <strong>proxy</strong>: an object with the same interface that runs extra code
+     before and after your method.</p>
+  <pre><code>@Transactional
+public void placeOrder(Order order) { ... }
+
+// what actually runs:
+// proxy: begin transaction → your method → commit (or roll back on exception)</code></pre>
+  <div class="warn">
+    <strong>The proxy gotcha you will hit</strong>
+    Because the behaviour lives in the proxy, calling an annotated method <em>from another method of the same
+    class</em> bypasses it entirely — no transaction, no security check. The call has to come from outside the bean.
+    Remember this; it explains a bug you will otherwise spend an afternoon on.
+  </div>
+
+  <h2>Why the industry uses it</h2>
+  <p>Not because it is elegant — because it is <em>boring in the right way</em>. A Spring Boot service in one company
+     looks like a Spring Boot service in another: same layout, same annotations, same configuration files. A developer
+     moves teams and is productive in days. That standardisation is why the job adverts all say Spring, and why this
+     course is worth your time.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Write down, in your own words, what "the container creates my objects for me" buys you. Three benefits, no
+          jargon.</li>
+      <li>Take the hand-wired <code>OrderController</code> at the top of this page and rewrite it using constructor
+          parameters only — no <code>new</code> anywhere. Note how the class shrinks.</li>
+      <li>List the beans a small blog application would need (controller, service, repository, email sender) and draw
+          the arrows between them.</li>
+      <li>Explain to someone else why an interface makes testing easier. If you cannot, re-read lesson 11 of the Java
+          course.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What Java is and how it runs — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="01-introduction.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>What Java is and how it runs</h1>
+  <p class="lead">Before the syntax, the machinery: what happens between the text you type and a program that runs.</p>
+
+  <h2>What Java is</h2>
+  <p>Java is a statically typed, object-oriented, compiled language that runs on a virtual machine. Unpacking that:</p>
+  <ul>
+    <li><strong>Statically typed</strong> — every variable has a type known at compile time, and the compiler refuses
+        code that misuses it. A whole class of mistakes is caught before the program ever runs.</li>
+    <li><strong>Object-oriented</strong> — code lives inside classes; data and the behaviour that operates on it are
+        bundled together.</li>
+    <li><strong>Compiled to bytecode</strong> — not to machine code for your specific CPU, but to an intermediate
+        format that any Java Virtual Machine can execute.</li>
+    <li><strong>Garbage collected</strong> — you allocate objects; you never free them. The JVM reclaims memory that
+        nothing references any more.</li>
+  </ul>
+  <p>It is the default choice for backend services in banking, insurance, telecom, retail and large enterprises
+     generally — which is why "Java + Spring" is one of the most common junior job descriptions in the market.</p>
+
+  <h2>JDK, JRE, JVM</h2>
+  <p>Three acronyms that beginners mix up constantly. They are nested:</p>
+  <table>
+    <tr><th>Term</th><th>What it is</th><th>Do you need it?</th></tr>
+    <tr><td><strong>JVM</strong> (Java Virtual Machine)</td>
+        <td>The program that executes bytecode. It is what makes "write once, run anywhere" true: the same
+            <code>.class</code> file runs on Windows, Linux and macOS.</td>
+        <td>To run Java</td></tr>
+    <tr><td><strong>JRE</strong> (Java Runtime Environment)</td>
+        <td>JVM + the standard library (<code>String</code>, <code>List</code>, and thousands more classes).</td>
+        <td>To run Java</td></tr>
+    <tr><td><strong>JDK</strong> (Java Development Kit)</td>
+        <td>JRE + the compiler (<code>javac</code>) and developer tools (<code>jar</code>, <code>javadoc</code>,
+            <code>jshell</code>, debugger).</td>
+        <td>To write Java — install this one</td></tr>
+  </table>
+
+  <h2>From source to running program</h2>
+  <pre><code>Main.java        →   javac   →   Main.class        →    java     →   running program
+(your source)      (compiler)    (JVM bytecode)      (the JVM)</code></pre>
+  <p>The compiler checks types, resolves names and produces bytecode. The JVM loads that bytecode, verifies it, and
+     interprets it — then its <em>JIT</em> (just-in-time) compiler notices which methods run often and compiles those
+     to native machine code while the program is running. That is why a Java service is slow for its first few seconds
+     and fast afterwards.</p>
+
+  <h2>Your first program</h2>
+  <p>Create a file called <code>Main.java</code>. The public class name must match the file name — that is a rule, not
+     a convention.</p>
+  <pre><code>public class Main {
+    public static void main(String[] args) {
+        System.out.println("Hello, Java");
+    }
+}</code></pre>
+  <p>Run it:</p>
+  <pre><code>javac Main.java     # produces Main.class
+java Main           # prints: Hello, Java</code></pre>
+  <p>Since Java 11 you can skip the explicit compile step for a single file: <code>java Main.java</code>.</p>
+
+  <h3>Reading that signature word by word</h3>
+  <table>
+    <tr><td><code>public</code></td><td>Visible from anywhere. The JVM has to be able to call it.</td></tr>
+    <tr><td><code>static</code></td><td>Belongs to the class, not to an instance — so it can be called without
+        creating a <code>Main</code> object first.</td></tr>
+    <tr><td><code>void</code></td><td>Returns nothing.</td></tr>
+    <tr><td><code>main</code></td><td>The name the JVM looks for when starting a program.</td></tr>
+    <tr><td><code>String[] args</code></td><td>Command-line arguments. <code>java Main a b</code> gives
+        <code>args = ["a", "b"]</code>.</td></tr>
+  </table>
+
+  <h2>Anatomy of a real source file</h2>
+  <pre><code>package com.example.shop;          // 1. where this class lives
+
+import java.util.List;             // 2. classes from elsewhere that this file uses
+
+/**
+ * 3. Javadoc: documentation for the class.
+ */
+public class Order {               // 4. the type itself
+
+    private final List&lt;String&gt; items;   // field
+
+    public Order(List&lt;String&gt; items) {  // constructor
+        this.items = items;
+    }
+
+    public int size() {            // method
+        return items.size();       // statements end with a semicolon
+    }
+}</code></pre>
+  <ul>
+    <li><strong>Packages</strong> mirror folders: <code>com.example.shop.Order</code> lives in
+        <code>com/example/shop/Order.java</code>. They exist to keep names unique — reversed domain names are the
+        convention.</li>
+    <li><strong>Imports</strong> save typing. <code>java.lang</code> (String, Integer, System, Math…) is imported
+        automatically.</li>
+    <li><strong>Comments</strong>: <code>// to end of line</code>, <code>/* block */</code>, and <code>/** javadoc */</code>
+        which tools turn into documentation.</li>
+  </ul>
+
+  <h2>Naming conventions</h2>
+  <p>Java code is remarkably uniform across companies. Follow the conventions and your code reads like everyone else's.</p>
+  <table>
+    <tr><th>Thing</th><th>Style</th><th>Example</th></tr>
+    <tr><td>Class, interface, enum, record</td><td>UpperCamelCase, a noun</td><td><code>OrderService</code></td></tr>
+    <tr><td>Method</td><td>lowerCamelCase, usually a verb</td><td><code>calculateTotal()</code></td></tr>
+    <tr><td>Variable, field</td><td>lowerCamelCase</td><td><code>itemCount</code></td></tr>
+    <tr><td>Constant</td><td>UPPER_SNAKE_CASE</td><td><code>MAX_RETRIES</code></td></tr>
+    <tr><td>Package</td><td>all lowercase, dotted</td><td><code>com.example.shop</code></td></tr>
+  </table>
+
+  <h2>Which Java version</h2>
+  <p>Java releases every six months, but only some releases are <strong>LTS</strong> (long-term support): 8, 11, 17, 21,
+     25. Companies stay on LTS versions. Learn on 21; expect to meet 8, 11 and 17 in real codebases. Older code just
+     means fewer of the modern conveniences (records, <code>var</code>, switch expressions) — the fundamentals are
+     unchanged.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Write, compile and run <code>Main.java</code> from the terminal — not from an IDE. You should see the
+          <code>Main.class</code> file appear.</li>
+      <li>Print each command-line argument: run <code>java Main hello world</code> and make it print both.</li>
+      <li>Run <code>java -version</code> and <code>javac -version</code>. Note which version you have; you will need to
+          match it in build files later.</li>
+      <li>Deliberately break something — remove a semicolon, misspell <code>String</code> — and read the compiler error.
+          Getting comfortable reading errors early pays for itself many times over.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

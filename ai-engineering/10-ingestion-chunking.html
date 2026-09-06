@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ingestion and chunking — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="10-ingestion-chunking.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Ingestion and chunking</h1>
+  <p class="lead">The unglamorous stage where most RAG systems are actually won or lost. If the chunks are bad, no
+     amount of prompt tuning will save the answers.</p>
+
+  <h2>The pipeline</h2>
+  <pre><code>source files → parse → clean → chunk → enrich with metadata → embed → store
+     ↑                                                                    │
+     └──────────── re-run when documents change ──────────────────────────┘</code></pre>
+
+  <h2>Parsing: getting text out of documents</h2>
+  <table>
+    <tr><th>Format</th><th>Approach</th></tr>
+    <tr><td>Plain text, Markdown</td><td>Read it. Keep the heading structure — it is free metadata.</td></tr>
+    <tr><td>HTML</td><td><code>trafilatura</code> or <code>readability</code> to strip navigation and boilerplate;
+        BeautifulSoup when you need control.</td></tr>
+    <tr><td>PDF (digital)</td><td><code>pymupdf</code> (fast, good layout), <code>pdfplumber</code> (better for
+        tables).</td></tr>
+    <tr><td>PDF (scanned)</td><td>OCR — <code>tesseract</code>, or hand the page image straight to a multimodal model,
+        which is often better and simpler.</td></tr>
+    <tr><td>DOCX / PPTX / XLSX</td><td><code>python-docx</code>, <code>python-pptx</code>, <code>openpyxl</code>.</td></tr>
+    <tr><td>Anything, quickly</td><td><code>unstructured</code> or LlamaIndex readers — convenient, heavier
+        dependencies, less control.</td></tr>
+  </table>
+  <pre><code>import fitz   # pymupdf
+
+def parse_pdf(path: str) -> list[tuple[int, str]]:
+    """Return (page_number, text) pairs — keep the page for citations."""
+    pages = []
+    with fitz.open(path) as doc:
+        for number, page in enumerate(doc, start=1):
+            text = page.get_text("text")
+            if text.strip():
+                pages.append((number, text))
+    return pages</code></pre>
+  <div class="warn">
+    <strong>Look at your extracted text before you build anything on it</strong>
+    Print a few pages. PDFs produce hyphenated line breaks, headers and footers repeated on every page, columns
+    interleaved into nonsense, ligatures, and tables flattened into unreadable runs of numbers. Every one of those flows
+    straight into your embeddings. This ten-minute check saves days.
+  </div>
+
+  <h2>Cleaning</h2>
+  <pre><code>import re
+
+def clean(text: str) -> str:
+    text = text.replace("­", "")                     # soft hyphens
+    text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)          # rejoin hyphenated line breaks
+    text = re.sub(r"[ \t]+", " ", text)                   # collapse runs of spaces
+    text = re.sub(r"\n{3,}", "\n\n", text)                # collapse blank lines
+    return text.strip()
+
+def strip_repeated_lines(pages: list[str], threshold: float = 0.6) -> list[str]:
+    """Remove headers/footers that appear on most pages."""
+    from collections import Counter
+    counts = Counter(line.strip() for page in pages for line in page.splitlines() if line.strip())
+    boilerplate = {line for line, n in counts.items() if n &gt;= threshold * len(pages)}
+    return ["\n".join(l for l in page.splitlines() if l.strip() not in boilerplate) for page in pages]</code></pre>
+  <p>Keep the cleaning conservative and reversible. Aggressive normalisation destroys the structure — headings, lists,
+     tables — that makes chunks readable.</p>
+
+  <h2>Why chunking exists</h2>
+  <ol>
+    <li>Embedding models have an input limit; longer text is truncated.</li>
+    <li>One vector cannot represent twenty pages of mixed topics.</li>
+    <li>You retrieve chunks into a prompt — they must be small enough that several fit, and self-contained enough to
+        make sense alone.</li>
+  </ol>
+
+  <h2>Strategies, from worst to best</h2>
+  <h3>Fixed-size character splitting</h3>
+  <pre><code>def chunk_fixed(text: str, size: int = 1000, overlap: int = 150) -> list[str]:
+    step = size - overlap
+    return [text[i:i + size] for i in range(0, len(text), step)]</code></pre>
+  <p>Simple, and it cuts sentences and tables in half. Acceptable as a baseline; rarely the right final answer.</p>
+
+  <h3>Recursive splitting on structure</h3>
+  <p>Try to split on paragraph breaks; if a piece is still too big, split on sentences; then on words. This keeps
+     semantic units intact and is the sensible default.</p>
+  <pre><code>SEPARATORS = ["\n## ", "\n### ", "\n\n", "\n", ". ", " "]
+
+def chunk_recursive(text: str, size: int = 900, overlap: int = 120,
+                    separators: list[str] = SEPARATORS) -> list[str]:
+    if len(text) &lt;= size:
+        return [text] if text.strip() else []
+
+    for sep in separators:
+        if sep not in text:
+            continue
+        parts, chunks, current = text.split(sep), [], ""
+        for part in parts:
+            candidate = (current + sep + part) if current else part
+            if len(candidate) &lt;= size:
+                current = candidate
+            else:
+                if current:
+                    chunks.append(current)
+                current = (current[-overlap:] + sep + part) if overlap and current else part
+        if current:
+            chunks.append(current)
+        return [c for c in chunks if c.strip()]
+
+    return chunk_fixed(text, size, overlap)</code></pre>
+
+  <h3>Structure-aware chunking</h3>
+  <p>Best of all when the format allows it. Split Markdown by heading; split code by function or class; split a
+     spreadsheet by row group; split a contract by clause. The document already tells you where the boundaries are —
+     use them.</p>
+  <pre><code>def chunk_markdown(text: str) -&gt; list[dict]:
+    """One chunk per section, carrying its heading path."""
+    chunks, path, buffer = [], [], []
+
+    def flush():
+        body = "\n".join(buffer).strip()
+        if body:
+            chunks.append({"heading_path": " &gt; ".join(path), "text": body})
+
+    for line in text.splitlines():
+        if line.startswith("#"):
+            flush(); buffer.clear()
+            level = len(line) - len(line.lstrip("#"))
+            path[:] = path[:level - 1] + [line.lstrip("# ").strip()]
+        else:
+            buffer.append(line)
+    flush()
+    return chunks</code></pre>
+
+  <h3>Semantic chunking</h3>
+  <p>Embed sentences, then cut where consecutive similarity drops — a topic change. Elegant, more expensive, and in
+     practice rarely beats good structure-aware chunking by enough to justify it. Try it only after the basics are
+     solid.</p>
+
+  <h2>Choosing size and overlap</h2>
+  <table>
+    <tr><th>Content</th><th>Chunk size</th><th>Notes</th></tr>
+    <tr><td>FAQ, short answers</td><td>200–400 tokens</td><td>One question and answer per chunk</td></tr>
+    <tr><td>Documentation, handbooks</td><td>400–800 tokens</td><td>One section per chunk</td></tr>
+    <tr><td>Narrative, legal text</td><td>800–1200 tokens</td><td>Context matters, keep clauses whole</td></tr>
+    <tr><td>Code</td><td>By function or class</td><td>Never split mid-function</td></tr>
+  </table>
+  <p>Overlap of roughly 10–20% stops an answer that straddles a boundary from being lost. More overlap means more
+     storage and more near-duplicate retrieval results.</p>
+  <p>Measure in <em>tokens</em>, not characters — your embedding model's limit is in tokens, and the ratio varies by
+     language. Small chunks retrieve precisely but lose context; large chunks carry context but dilute the vector and
+     crowd the prompt. The only honest way to pick is to try two or three configurations and measure retrieval quality
+     (lesson 12).</p>
+
+  <h2>Make each chunk stand alone</h2>
+  <p>A retrieved chunk arrives with no surroundings. "It must be renewed every 12 months" is useless without knowing
+     what "it" is. Two cheap fixes, both effective:</p>
+  <pre><code># 1. prepend the document and section context to the embedded text
+embedded_text = (
+    f"Document: {doc.title}\n"
+    f"Section: {chunk.heading_path}\n\n"
+    f"{chunk.text}"
+)
+
+# 2. "contextual retrieval": have a cheap model write one sentence
+#    situating the chunk in the document, and prepend that
+context_line = cheap_model(
+    f"&lt;document&gt;{doc_summary}&lt;/document&gt;\n"
+    f"&lt;chunk&gt;{chunk.text}&lt;/chunk&gt;\n"
+    "Write one sentence placing this chunk in the context of the document."
+)
+embedded_text = f"{context_line}\n\n{chunk.text}"</code></pre>
+  <p>The second costs one cheap call per chunk at ingestion time — paid once, benefiting every future query — and
+     typically produces a solid improvement in retrieval quality. It is one of the highest-return changes available.</p>
+
+  <h2>Tables, images and code</h2>
+  <ul>
+    <li><strong>Tables</strong> lose all meaning when flattened. Convert to Markdown or CSV inside the chunk, keep the
+        header row with every fragment, and consider storing a short natural-language summary of the table as the
+        embedded text.</li>
+    <li><strong>Images and diagrams</strong> — caption them with a multimodal model at ingestion and embed the caption;
+        keep a reference to the image for display.</li>
+    <li><strong>Code</strong> — chunk by symbol, and include the file path and the enclosing class in the chunk header.</li>
+  </ul>
+
+  <h2>Putting it together</h2>
+  <pre><code>from dataclasses import dataclass, field
+
+@dataclass
+class Chunk:
+    document_id: str
+    ordinal: int
+    text: str
+    metadata: dict = field(default_factory=dict)
+
+def ingest(path: str, tenant: str) -> list[Chunk]:
+    document_id = stable_id(path)
+    pages = parse_pdf(path)
+    pages = strip_repeated_lines([clean(t) for _, t in pages])
+
+    chunks: list[Chunk] = []
+    for page_number, page_text in enumerate(pages, start=1):
+        for part in chunk_recursive(page_text, size=900, overlap=120):
+            chunks.append(Chunk(
+                document_id=document_id,
+                ordinal=len(chunks),
+                text=part,
+                metadata={
+                    "source": Path(path).name,
+                    "page": page_number,
+                    "tenant": tenant,
+                    "content_hash": sha256(part),
+                    "ingested_at": datetime.now(timezone.utc).isoformat(),
+                },
+            ))
+    return chunks</code></pre>
+  <pre><code># then: embed in batches, upsert, and log the counts
+vectors = embed([f"{c.metadata['source']}\n\n{c.text}" for c in chunks])
+store.upsert(chunks, vectors)
+log.info("ingested %s: %d chunks, %d tokens", path, len(chunks), total_tokens)</code></pre>
+
+  <h2>Operating an ingestion pipeline</h2>
+  <ul>
+    <li><strong>Make it idempotent.</strong> Re-running must not duplicate chunks — delete-then-insert per document, or
+        upsert by a deterministic chunk id.</li>
+    <li><strong>Skip unchanged documents</strong> by content hash.</li>
+    <li><strong>Handle deletions</strong> — a document removed at the source must leave the index.</li>
+    <li><strong>Run it as a job</strong>, not inside a web request. Large ingests belong in a queue.</li>
+    <li><strong>Log per document</strong>: chunk count, token count, failures. A document that produced two chunks when
+        it should have produced two hundred is a parsing failure you want to see.</li>
+    <li><strong>Keep the raw text</strong> you extracted. When retrieval misbehaves you will want to inspect exactly
+        what was indexed, and re-parsing everything to find out is painful.</li>
+  </ul>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Extract text from three PDFs of different kinds (a report, a scanned document, one with tables). Print the
+          first page of each and list every extraction problem you see.</li>
+      <li>Implement recursive chunking and run it over a long document. Read ten random chunks and ask honestly: would
+          this make sense to someone who saw only this?</li>
+      <li>Chunk the same document at 300, 800 and 1500 tokens and compare the counts and the readability.</li>
+      <li>Add heading-path prefixes to the embedded text and see whether your lesson 8 search improves.</li>
+      <li>Implement contextual retrieval with a cheap model on 50 chunks and compare retrieval before and after.</li>
+      <li>Make ingestion idempotent and prove it: run it twice, confirm the chunk count does not change.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

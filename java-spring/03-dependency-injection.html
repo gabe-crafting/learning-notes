@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dependency injection and beans — Java Spring</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java-spring" data-page="03-dependency-injection.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Dependency injection and beans</h1>
+  <p class="lead">The mechanics of the container: how objects get into it, how they get wired together, and what to do
+     when Spring cannot decide.</p>
+
+  <h2>Declaring a bean</h2>
+  <h3>By annotation (component scanning)</h3>
+  <pre><code>@Component      // generic
+@Service        // business logic          ─┐
+@Repository     // data access              ├─ all are @Component with a clearer name
+@Controller     // web layer (MVC views)    │
+@RestController // web layer (JSON)        ─┘</code></pre>
+  <pre><code>@Service
+public class TaskService {
+    ...
+}</code></pre>
+  <p>They behave identically to the container, with two exceptions: <code>@Repository</code> translates persistence
+     exceptions into Spring's <code>DataAccessException</code> hierarchy, and <code>@RestController</code> implies
+     <code>@ResponseBody</code>. Use the specific one anyway — it tells a reader what the class is for.</p>
+
+  <h3>By configuration method</h3>
+  <pre><code>@Configuration
+public class AppConfig {
+
+    @Bean
+    public RestClient restClient() {
+        return RestClient.builder()
+                .baseUrl("https://api.example.com")
+                .build();
+    }
+
+    @Bean
+    public Clock clock() {
+        return Clock.systemUTC();
+    }
+}</code></pre>
+  <p>Use <code>@Bean</code> when you cannot annotate the class — third-party types, or when construction needs logic.
+     The method name becomes the bean name.</p>
+
+  <h2>Injecting dependencies</h2>
+  <h3>Constructor injection — the only one you should use</h3>
+  <pre><code>@Service
+public class TaskService {
+
+    private final TaskRepository repository;
+    private final Clock clock;
+
+    public TaskService(TaskRepository repository, Clock clock) {   // no @Autowired needed
+        this.repository = repository;
+        this.clock = clock;
+    }
+}</code></pre>
+  <p>Since Spring 4.3, a class with a single constructor gets it autowired automatically.</p>
+  <p>Why constructor injection wins:</p>
+  <ul>
+    <li>Fields can be <code>final</code> — the object is fully built and immutable.</li>
+    <li>The object cannot exist in a half-initialised state.</li>
+    <li>Tests can construct it with <code>new TaskService(mockRepo, fixedClock)</code> — no Spring at all.</li>
+    <li>A constructor with eight parameters is visibly wrong, which is useful feedback about the design.</li>
+  </ul>
+
+  <h3>The alternatives, and why not</h3>
+  <pre><code>@Autowired
+private TaskRepository repository;      // field injection: cannot be final, untestable
+                                        // without reflection, hides how many dependencies exist
+
+@Autowired
+public void setRepository(TaskRepository r) { ... }   // setter: for genuinely optional deps only</code></pre>
+  <p>Field injection is common in older tutorials and IntelliJ will warn about it. Do not write new code with it.</p>
+
+  <h3>Lombok, if the project uses it</h3>
+  <pre><code>@Service
+@RequiredArgsConstructor            // generates a constructor for all final fields
+public class TaskService {
+    private final TaskRepository repository;
+    private final Clock clock;
+}</code></pre>
+
+  <h2>When there is more than one candidate</h2>
+  <pre><code>public interface NotificationSender { void send(String to, String message); }
+
+@Component class EmailSender implements NotificationSender { ... }
+@Component class SmsSender   implements NotificationSender { ... }
+
+@Service
+public class AlertService {
+    public AlertService(NotificationSender sender) { ... }   // which one?!
+}
+// NoUniqueBeanDefinitionException: expected single matching bean but found 2</code></pre>
+  <p>Four ways out:</p>
+  <pre><code>// 1. mark a default
+@Component @Primary class EmailSender implements NotificationSender { ... }
+
+// 2. name the one you want
+public AlertService(@Qualifier("smsSender") NotificationSender sender) { ... }
+
+// 3. choose by configuration
+@Component
+@ConditionalOnProperty(name = "notifications.channel", havingValue = "sms")
+class SmsSender implements NotificationSender { ... }
+
+// 4. inject them all
+public AlertService(List&lt;NotificationSender&gt; senders) { ... }        // send to every channel
+public AlertService(Map&lt;String, NotificationSender&gt; byName) { ... }  // keyed by bean name</code></pre>
+  <p>That last one is a genuinely nice pattern for strategies: add a new implementation and it joins the list without
+     touching existing code.</p>
+
+  <h2>Bean scopes</h2>
+  <table>
+    <tr><td><code>singleton</code> (default)</td><td>One instance for the whole application</td></tr>
+    <tr><td><code>prototype</code></td><td>A new instance every time it is injected or requested</td></tr>
+    <tr><td><code>request</code></td><td>One per HTTP request (web apps)</td></tr>
+    <tr><td><code>session</code></td><td>One per HTTP session</td></tr>
+  </table>
+  <pre><code>@Service
+@Scope("prototype")
+public class ReportBuilder { ... }</code></pre>
+  <div class="warn">
+    <strong>Singletons are shared across threads</strong>
+    Every request uses the same <code>@Service</code> instance. Never put per-request state in a field. Dependencies in
+    final fields, everything else as method parameters and local variables.
+  </div>
+
+  <h2>Lifecycle</h2>
+  <pre><code>@Component
+public class CacheWarmer {
+
+    @PostConstruct                 // after construction and injection
+    void warmUp() { ... }
+
+    @PreDestroy                    // on graceful shutdown
+    void flush() { ... }
+}
+
+@Component
+public class Startup implements ApplicationRunner {
+    @Override
+    public void run(ApplicationArguments args) {   // after the context is fully ready
+        ...
+    }
+}</code></pre>
+  <p>Do not do real work in a constructor — the object may not be fully wired yet, and failures there produce confusing
+     startup errors.</p>
+
+  <h2>Circular dependencies</h2>
+  <pre><code>A needs B, B needs A
+→ BeanCurrentlyInCreationException (Boot 2.6+ rejects this by default)</code></pre>
+  <p>The fix is not <code>spring.main.allow-circular-references=true</code>. A cycle means the responsibilities are
+     wrong: extract the shared logic into a third bean, or use an event so one side no longer depends on the other.</p>
+
+  <h2>Seeing what is in the container</h2>
+  <pre><code>@Component
+class BeanPrinter implements ApplicationRunner {
+    private final ApplicationContext ctx;
+    BeanPrinter(ApplicationContext ctx) { this.ctx = ctx; }
+
+    @Override public void run(ApplicationArguments args) {
+        Arrays.stream(ctx.getBeanDefinitionNames()).sorted().forEach(System.out::println);
+    }
+}</code></pre>
+  <pre><code># or ask Boot why it configured something
+./mvnw spring-boot:run -Ddebug
+# prints the auto-configuration report: what matched, what did not, and why</code></pre>
+
+  <h2>The errors you will actually see</h2>
+  <table>
+    <tr><th>Message</th><th>Usual cause</th></tr>
+    <tr><td><code>NoSuchBeanDefinitionException</code></td><td>Missing <code>@Component</code>/<code>@Bean</code>, or
+        the class is outside the scanned packages</td></tr>
+    <tr><td><code>NoUniqueBeanDefinitionException</code></td><td>Two implementations — use
+        <code>@Primary</code> or <code>@Qualifier</code></td></tr>
+    <tr><td><code>BeanCurrentlyInCreationException</code></td><td>Circular dependency</td></tr>
+    <tr><td><code>NullPointerException</code> on an injected field</td><td>The object was created with
+        <code>new</code> instead of coming from the container</td></tr>
+  </table>
+  <p>That last one is worth internalising: <strong>injection only happens for beans Spring created.</strong> If you
+     write <code>new TaskService()</code> yourself, nothing is injected.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Build <code>TaskController</code> → <code>TaskService</code> → <code>InMemoryTaskRepository</code> with
+          constructor injection, all three as beans.</li>
+      <li>Add a second <code>TaskRepository</code> implementation, watch the startup fail, then fix it with
+          <code>@Primary</code> and again with <code>@Qualifier</code>.</li>
+      <li>Define a <code>Clock</code> bean and inject it instead of calling <code>LocalDate.now()</code>. Explain why
+          this makes the service testable.</li>
+      <li>Inject <code>List&lt;NotificationSender&gt;</code> and have a service call every implementation.</li>
+      <li>Print every bean name at startup and find three you never declared.</li>
+      <li>Create a deliberate circular dependency, read the error, then break the cycle properly.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

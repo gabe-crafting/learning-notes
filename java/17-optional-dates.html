@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Optional, dates and utilities — Java</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="java" data-page="17-optional-dates.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Optional, dates and utilities</h1>
+  <p class="lead">Handling absence properly, working with time correctly, and the standard-library helpers you should
+     not reimplement.</p>
+
+  <h2>Optional</h2>
+  <p><code>Optional&lt;T&gt;</code> is a container that either holds a value or is empty. Its job is to make "there may
+     be nothing here" part of the type, so the caller cannot forget.</p>
+  <pre><code>// before
+public User findByEmail(String email) {
+    return null;                       // callers forget to check → NullPointerException
+}
+
+// after
+public Optional&lt;User&gt; findByEmail(String email) {
+    return Optional.empty();           // the signature says it may be absent
+}</code></pre>
+
+  <h3>Creating</h3>
+  <pre><code>Optional.of(value)              // value must not be null, else NPE
+Optional.ofNullable(maybeNull)  // empty if null   ← the usual choice
+Optional.empty()</code></pre>
+
+  <h3>Using it</h3>
+  <pre><code>Optional&lt;User&gt; found = repository.findByEmail(email);
+
+// default value
+User user = found.orElse(User.GUEST);
+User user = found.orElseGet(() -&gt; createGuest());     // lazy — only runs if empty
+
+// or fail
+User user = found.orElseThrow();                       // NoSuchElementException
+User user = found.orElseThrow(() -&gt; new UserNotFoundException(email));
+
+// act if present
+found.ifPresent(u -&gt; log.info("Found {}", u.name()));
+found.ifPresentOrElse(this::send, () -&gt; log.warn("no user"));
+
+// transform without unwrapping
+String name = found.map(User::name).orElse("unknown");
+Optional&lt;String&gt; city = found.flatMap(User::city);     // when the mapper returns Optional
+Optional&lt;User&gt; active = found.filter(User::isActive);
+
+// as a stream
+found.stream().forEach(...);</code></pre>
+
+  <h3>Using it badly</h3>
+  <pre><code>if (found.isPresent()) {          // this is just a null check with extra steps
+    User u = found.get();
+}
+found.get();                       // throws if empty — avoid outside tests</code></pre>
+  <p>Guidelines that keep <code>Optional</code> useful:</p>
+  <ul>
+    <li>Use it as a <strong>return type</strong> for "might not find anything".</li>
+    <li>Do <strong>not</strong> use it for fields or method parameters — it is not serialisable and it clutters
+        constructors. Overload the method instead.</li>
+    <li>Never return <code>null</code> from a method that returns <code>Optional</code>. That is a special circle of
+        confusion.</li>
+    <li>For collections, return an empty list rather than an <code>Optional&lt;List&gt;</code>.</li>
+  </ul>
+
+  <h2>Dates and times (java.time)</h2>
+  <p>Java 8 replaced the broken <code>Date</code>/<code>Calendar</code> API. Everything in <code>java.time</code> is
+     immutable and thread-safe. Never use <code>java.util.Date</code> or <code>SimpleDateFormat</code> in new code.</p>
+  <table>
+    <tr><td><code>LocalDate</code></td><td>A date with no time or zone — birthdays, invoice dates</td></tr>
+    <tr><td><code>LocalTime</code></td><td>A time with no date — opening hours</td></tr>
+    <tr><td><code>LocalDateTime</code></td><td>Both, still no zone — usually not what you want for events</td></tr>
+    <tr><td><code>Instant</code></td><td>A point on the UTC timeline — timestamps, "created at"</td></tr>
+    <tr><td><code>ZonedDateTime</code></td><td>Date, time and zone — meetings, anything user-facing</td></tr>
+    <tr><td><code>Duration</code></td><td>A time-based amount (seconds, minutes)</td></tr>
+    <tr><td><code>Period</code></td><td>A date-based amount (days, months, years)</td></tr>
+  </table>
+  <pre><code>LocalDate today = LocalDate.now();
+LocalDate d = LocalDate.of(2026, 3, 14);
+LocalDate parsed = LocalDate.parse("2026-03-14");        // ISO format by default
+
+d.plusDays(10);  d.minusMonths(2);  d.plusYears(1);      // return NEW objects
+d.getDayOfWeek();  d.getMonthValue();  d.lengthOfMonth();  d.isLeapYear();
+d.isBefore(today);  d.isAfter(today);
+d.withDayOfMonth(1);
+
+Instant now = Instant.now();                              // store timestamps as UTC
+ZonedDateTime local = now.atZone(ZoneId.of("Europe/Bucharest"));
+
+Duration meeting = Duration.ofMinutes(90);
+Duration between = Duration.between(start, end);
+between.toMinutes();
+
+Period age = Period.between(birthday, today);
+age.getYears();
+
+long days = ChronoUnit.DAYS.between(start, end);</code></pre>
+
+  <h3>Formatting and parsing</h3>
+  <pre><code>DateTimeFormatter fmt = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+String text = date.format(fmt);                  // "14/03/2026"
+LocalDate back = LocalDate.parse("14/03/2026", fmt);
+
+date.format(DateTimeFormatter.ISO_DATE);         // 2026-03-14
+dateTime.format(DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM));</code></pre>
+  <div class="note">
+    <strong>Rules that save you pain</strong>
+    Store instants in UTC; convert to a zone only when displaying. Never store a zone offset as a substitute for a zone
+    id (offsets change twice a year). For "a date the user picked", <code>LocalDate</code> is correct — do not attach a
+    time to it.
+  </div>
+
+  <h2>Math and random</h2>
+  <pre><code>Math.abs(-5)        Math.max(a, b)      Math.min(a, b)
+Math.pow(2, 10)     Math.sqrt(16)       Math.round(2.5)     // 3
+Math.floor(2.9)     Math.ceil(2.1)      Math.floorMod(-7, 3)
+Math.random()                            // 0.0 &lt;= x &lt; 1.0
+
+Random random = new Random();
+random.nextInt(100);        // 0..99
+random.nextInt(1, 7);       // 1..6  (Java 17+)
+random.nextDouble();
+random.nextBoolean();
+
+ThreadLocalRandom.current().nextInt(1, 7);   // better in multithreaded code
+new Random(42);                               // fixed seed → reproducible, useful in tests</code></pre>
+
+  <h2>Objects</h2>
+  <pre><code>Objects.equals(a, b)                    // null-safe equality
+Objects.hash(field1, field2)            // for hashCode
+Objects.requireNonNull(arg, "arg")      // fail fast with a clear message
+Objects.requireNonNullElse(value, "default")
+Objects.toString(maybeNull, "n/a")
+Objects.isNull(x)   Objects.nonNull(x)  // handy as method references in streams</code></pre>
+
+  <h2>BigDecimal for money</h2>
+  <pre><code>BigDecimal price = new BigDecimal("19.99");     // from a String, never a double
+BigDecimal qty = BigDecimal.valueOf(3);
+
+BigDecimal total = price.multiply(qty);          // immutable: use the result
+total = total.setScale(2, RoundingMode.HALF_UP);
+total.compareTo(BigDecimal.ZERO) &gt; 0;            // compare with compareTo, not equals
+// equals also compares scale: 1.0 is NOT equal to 1.00</code></pre>
+
+  <h2>Regex utilities</h2>
+  <pre><code>Pattern EMAIL = Pattern.compile("^[\\w.+-]+@[\\w-]+\\.[\\w.]+$");   // compile once, reuse
+EMAIL.matcher(input).matches();
+
+Matcher m = Pattern.compile("(\\d{4})-(\\d{2})").matcher(text);
+while (m.find()) {
+    System.out.println(m.group(1) + " / " + m.group(2));
+}</code></pre>
+
+  <h2>System, environment and logging</h2>
+  <pre><code>System.currentTimeMillis();          // wall clock, for timestamps
+System.nanoTime();                   // monotonic, for measuring durations
+System.getenv("DATABASE_URL");       // environment variable
+System.getProperty("user.home");     // JVM property
+System.lineSeparator();</code></pre>
+  <p>For real logging use SLF4J rather than <code>System.out</code>:</p>
+  <pre><code>private static final Logger log = LoggerFactory.getLogger(OrderService.class);
+
+log.info("Order {} created for customer {}", orderId, customerId);   // placeholders, not +
+log.warn("Retrying after failure", exception);
+log.debug("Payload: {}", payload);      // only formatted if debug is enabled</code></pre>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Change a <code>findById</code> method that returns <code>null</code> into one returning
+          <code>Optional</code>, then update every caller.</li>
+      <li>Write <code>ageInYears(LocalDate birthday)</code> and <code>workingDaysBetween(LocalDate, LocalDate)</code>.</li>
+      <li>Print the current time in three time zones from a single <code>Instant</code>.</li>
+      <li>Compute an order total with <code>BigDecimal</code>, rounded to two decimals, and show why
+          <code>double</code> gets it wrong.</li>
+      <li>Chain <code>map</code>, <code>filter</code> and <code>orElseThrow</code> on an <code>Optional</code> without
+          ever calling <code>isPresent</code>.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

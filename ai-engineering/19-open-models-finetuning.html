@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open models and fine-tuning — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="19-open-models-finetuning.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Open models and fine-tuning</h1>
+  <p class="lead">When to run your own weights, when to train on your own data, and — usually — why you should do
+     neither yet.</p>
+
+  <h2>The decision, up front</h2>
+  <table>
+    <tr><th>Problem</th><th>Solution</th></tr>
+    <tr><td>The model does not know your facts</td><td><strong>RAG</strong> (lessons 8–12). Not fine-tuning.</td></tr>
+    <tr><td>The model does not follow your format</td><td><strong>Structured output</strong> (lesson 6). Not
+        fine-tuning.</td></tr>
+    <tr><td>The model does not follow your instructions</td><td><strong>Better prompting and examples</strong> (lesson
+        5).</td></tr>
+    <tr><td>You need a consistent tone or style at scale</td><td>Prompt with examples first; fine-tune if that is not
+        enough.</td></tr>
+    <tr><td>You need a specialised classifier, very cheap, very fast, very high volume</td><td><strong>Fine-tune a small
+        model</strong> — a legitimate case.</td></tr>
+    <tr><td>Data must not leave your infrastructure</td><td><strong>Self-host an open model.</strong></td></tr>
+    <tr><td>Per-token cost is genuinely prohibitive at your volume</td><td>Self-host, after doing the arithmetic
+        honestly.</td></tr>
+  </table>
+  <div class="note">
+    <strong>"We fine-tuned it on our docs and it still hallucinates"</strong>
+    A recurring and expensive mistake. Fine-tuning adjusts <em>behaviour</em> — style, format, task shape. It is a poor
+    and unreliable way to install <em>knowledge</em>, and it goes stale the moment your documents change. Knowledge goes
+    in the context window at query time.
+  </div>
+
+  <h2>Open models</h2>
+  <p>"Open weights" means you can download and run the model. Notable families you will meet: <strong>Llama</strong>
+     (Meta), <strong>Mistral</strong> and <strong>Mixtral</strong>, <strong>Qwen</strong> (Alibaba),
+     <strong>Gemma</strong> (Google), <strong>DeepSeek</strong>, <strong>Phi</strong> (Microsoft), plus many
+     fine-tunes on Hugging Face. Licences vary — some are properly open source, others restrict commercial use or
+     scale. Read the licence before you build a business on one.</p>
+
+  <h3>Why you would</h3>
+  <ul>
+    <li><strong>Data residency and privacy</strong> — nothing leaves your network. Often the deciding factor in health,
+        defence and some public-sector work.</li>
+    <li><strong>Cost at high, steady volume</strong> — a rented GPU has a fixed hourly price, so heavy constant load can
+        be cheaper than per-token billing.</li>
+    <li><strong>Latency</strong> — a small model on local hardware can beat a network round trip.</li>
+    <li><strong>Control</strong> — no deprecations, no rate limits, no surprise behaviour changes.</li>
+    <li><strong>Fine-tuning freedom</strong> — you can train the weights you serve.</li>
+  </ul>
+
+  <h3>Why you usually would not</h3>
+  <ul>
+    <li><strong>Capability gap.</strong> The best open models are strong; the frontier hosted models are usually
+        stronger, particularly on reasoning, long context, tool use and multilingual work.</li>
+    <li><strong>You are now running ML infrastructure.</strong> GPUs, drivers, batching, scaling, monitoring,
+        upgrades.</li>
+    <li><strong>The economics only work at scale.</strong> A GPU costs money while idle; an API costs nothing.</li>
+    <li><strong>Fewer conveniences</strong> — caching, batch endpoints, server-side tools and safety layers are yours to
+        build.</li>
+  </ul>
+
+  <h3>Running one</h3>
+  <pre><code># local experimentation
+ollama run llama3.1:8b
+ollama run qwen2.5:14b
+# then hit it from code — most servers expose an OpenAI-compatible endpoint
+
+# production serving: vLLM, high throughput, continuous batching
+pip install vllm
+vllm serve Qwen/Qwen2.5-14B-Instruct --max-model-len 32768
+
+# managed inference for open weights, no ops:
+# Together, Fireworks, Groq, Replicate, Hugging Face Inference Endpoints,
+# AWS Bedrock / Azure AI / Vertex model gardens</code></pre>
+  <p>Managed hosting of open weights is a sensible middle path: you get an open model and someone else's GPUs.</p>
+
+  <h3>Hardware, roughly</h3>
+  <table>
+    <tr><th>Model size</th><th>Precision</th><th>VRAM needed</th><th>Practical home</th></tr>
+    <tr><td>7–8B</td><td>4-bit</td><td>~6 GB</td><td>A laptop GPU; good for classification and extraction</td></tr>
+    <tr><td>7–8B</td><td>16-bit</td><td>~16 GB</td><td>One mid-range GPU</td></tr>
+    <tr><td>30–34B</td><td>4-bit</td><td>~20 GB</td><td>One high-end GPU</td></tr>
+    <tr><td>70B</td><td>4-bit</td><td>~40 GB</td><td>One A100/H100 or two consumer cards</td></tr>
+    <tr><td>70B</td><td>16-bit</td><td>~140 GB</td><td>Multi-GPU server</td></tr>
+  </table>
+  <p>Rule of thumb: parameters × bytes per parameter, plus 20–40% for the KV cache and overhead — and the KV cache grows
+     with context length and concurrency, which is what actually catches people out.</p>
+  <p><strong>Quantisation</strong> (GGUF, AWQ, GPTQ) shrinks weights to 8-, 4- or fewer bits with modest quality loss.
+     It is what makes small-GPU deployment realistic.</p>
+
+  <h2>Hugging Face</h2>
+  <pre><code>from transformers import pipeline
+
+classifier = pipeline("text-classification", model="distilbert-base-uncased-finetuned-sst-2-english")
+print(classifier("This product broke after two days"))    # [{'label': 'NEGATIVE', 'score': 0.99}]</code></pre>
+  <p>Beyond LLMs, the Hub is where you get embedding models, rerankers, OCR, speech-to-text, translation and small
+     task-specific classifiers. A distilled 100M-parameter classifier at a fraction of a millisecond per item is often a
+     far better answer than an LLM call — remember that this whole field is not only chat models.</p>
+
+  <h2>Fine-tuning</h2>
+  <h3>Approaches</h3>
+  <table>
+    <tr><td><strong>Full fine-tuning</strong></td><td>Update every weight. Expensive, needs serious hardware, rarely
+        necessary.</td></tr>
+    <tr><td><strong>LoRA / QLoRA</strong></td><td>Train small adapter matrices, freeze the base. A few hundred to a few
+        thousand examples, one GPU, hours not weeks. This is what "fine-tuning" means in practice today.</td></tr>
+    <tr><td><strong>Hosted fine-tuning</strong></td><td>Some providers fine-tune their models for you: upload examples,
+        get a model id back. Simplest path when available.</td></tr>
+    <tr><td><strong>Preference tuning (DPO and friends)</strong></td><td>Train on chosen/rejected pairs to shape
+        behaviour. Later-stage work.</td></tr>
+  </table>
+
+  <h3>What it takes</h3>
+  <pre><code># data: usually JSONL of conversations, a few hundred to a few thousand
+{"messages": [
+  {"role": "system", "content": "You extract structured data from Romanian invoices."},
+  {"role": "user", "content": "..."},
+  {"role": "assistant", "content": "{\"vendor\": \"...\", \"total\": 1234.5}"}
+]}</code></pre>
+  <p>Data quality dominates everything. 500 carefully checked examples beat 5,000 scraped ones. Your examples define the
+     behaviour precisely — including any mistakes you leave in them.</p>
+  <pre><code># QLoRA, conceptually — with peft/trl the training loop is short
+from peft import LoraConfig
+from trl import SFTTrainer
+
+config = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05, task_type="CAUSAL_LM")
+trainer = SFTTrainer(model=base_model, train_dataset=dataset, peft_config=config, ...)
+trainer.train()</code></pre>
+
+  <h3>The honest process</h3>
+  <ol>
+    <li><strong>Build the eval set first</strong> (lesson 16). Without it you cannot tell whether fine-tuning helped,
+        and fine-tuning frequently makes things worse in ways you will not notice by eye.</li>
+    <li><strong>Establish the prompted baseline.</strong> Best prompt, best examples, best model. Write the number
+        down.</li>
+    <li><strong>Only then</strong> collect data, train an adapter, and measure against the same set.</li>
+    <li><strong>Check what you broke.</strong> Fine-tuning on one task commonly degrades others — "catastrophic
+        forgetting" — and narrows the model's general ability.</li>
+    <li><strong>Plan the lifecycle.</strong> A fine-tuned model is a versioned artifact you must retrain when the base
+        model updates, when your task shifts, and when your data changes.</li>
+  </ol>
+
+  <h3>When it genuinely pays</h3>
+  <ul>
+    <li>A narrow, very high-volume task where a small fine-tuned model replaces a large prompted one, cutting cost by an
+        order of magnitude.</li>
+    <li>A format or style that resists prompting — a house voice, a domain-specific output convention.</li>
+    <li>A domain vocabulary the base model handles badly (specialised legal, medical or industrial language).</li>
+    <li>Latency requirements that need a small model to be good enough at one thing.</li>
+  </ul>
+  <p>Notice that all four are about behaviour and economics, never about facts.</p>
+
+  <h2>Distillation</h2>
+  <pre><code>1. Use a strong model to produce high-quality outputs on thousands of your real inputs.
+2. Review and clean them — this step is not optional.
+3. Fine-tune a small open model on those pairs.
+4. Evaluate the small model against the strong one on your eval set.</code></pre>
+  <p>A practical route to a cheap, fast, specialised model, and a common production pattern once a task is stable and
+     high-volume. Check the terms of service of the model you are distilling from — some prohibit using outputs to train
+     competing models.</p>
+
+  <h2>A realistic path</h2>
+  <pre><code>1. Hosted frontier model + good prompt              ← start here, always
+2. + retrieval                                      ← for knowledge
+3. + structured output, tools, evals                ← for reliability
+4. → cheaper hosted model on the easy paths          ← for cost
+5. → hosted open model                               ← for cost or control
+6. → self-hosted open model                          ← for privacy or scale
+7. → fine-tuned small model                          ← for a narrow, proven, high-volume task</code></pre>
+  <p>Most products stop at step 3 or 4 and are entirely correct to. Steps 5–7 are engineering investments that need a
+     measured reason, not a preference.</p>
+
+  <div class="task">
+    <strong>Practice</strong>
+    <ol>
+      <li>Run an 8B model locally with Ollama and compare it with a frontier model on ten tasks from your eval set.
+          Write down where it holds up and where it collapses.</li>
+      <li>Do the cost arithmetic for your project: API pricing at your expected volume versus a rented GPU per month.
+          Find the break-even point.</li>
+      <li>Use a small Hugging Face classifier for a task you were about to give an LLM, and compare accuracy, latency
+          and cost.</li>
+      <li>Write the prompted baseline number for a narrow task, and state what a fine-tune would have to beat.</li>
+      <li>Build a 200-example fine-tuning dataset for that task — even if you never train on it, the exercise shows you
+          how much work the data is.</li>
+      <li>Write a short decision memo: for your project, hosted or self-hosted, prompted or fine-tuned, and why.</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>
