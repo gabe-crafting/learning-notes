@@ -2,7 +2,12 @@
 
 A static site of study notes. One folder per subject, one HTML page per lesson, no build step.
 
-Open `index.html` in a browser, or serve the folder:
+**Live: https://gabe-crafting.github.io/learning-notes/**
+
+Published with GitHub Pages from `master` at the repository root — pushing to `master` redeploys it,
+usually within a minute. `.nojekyll` keeps Pages from running the files through Jekyll.
+
+Locally, open `index.html` in a browser, or serve the folder:
 
 ```bash
 python -m http.server 4173
