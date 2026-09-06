@@ -197,3 +197,22 @@ th { background: var(--surface); }
   .sidebar.open { display: block; }
   .menu-btn { display: block; }
 }
+
+/* ---------- sidebar: the notes page, kept apart from the lesson list ---------- */
+.sidebar-extra {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.sidebar-extra h2 { margin: 2px 6px 6px; }
+.notes-link {
+  display: block;
+  padding: 6px 10px;
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+}
+.notes-link:hover { background: var(--accent-soft); }
+.notes-link.active { background: var(--accent-soft); color: var(--accent); }
