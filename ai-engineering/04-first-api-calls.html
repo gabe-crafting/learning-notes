@@ -71,9 +71,67 @@ def ask(user_text: str) -> str:
 
 ask("My name is Ana.")
 ask("What is my name?")     # works only because the history is resent</code></pre>
-  <p>Since you resend everything, a long conversation grows linearly in cost. Strategies when it gets long: keep the
-     last N turns, summarise older ones into a compact note, or use the provider's server-side compaction. Decide this
-     early — retro-fitting it into a chat product is unpleasant.</p>
+  <p>Since you resend everything, a long conversation grows linearly in cost. Decide early how you will keep it
+     bounded — retro-fitting this into a chat product is unpleasant.</p>
+
+  <h3>Keeping the history bounded</h3>
+  <table>
+    <tr><th>Strategy</th><th>Costs you</th><th>Loses</th></tr>
+    <tr><td>Sliding window — keep the last N</td><td>Nothing extra</td><td>Everything older, abruptly</td></tr>
+    <tr><td>Rolling summary</td><td>An extra model call</td><td>Detail, gradually</td></tr>
+    <tr><td>Server-side compaction</td><td>Portability</td><td>Control over what is kept</td></tr>
+    <tr><td>Retrieval over history</td><td>A whole pipeline</td><td>Whatever retrieval misses</td></tr>
+  </table>
+
+  <h4>Sliding window — keep the last N turns</h4>
+  <p><strong>For:</strong> trivial to implement, no extra model call, no new failure mode. Cost and latency stop growing,
+     permanently. Behaviour is deterministic, so bugs reproduce.</p>
+  <p><strong>Against:</strong> amnesia with no signal — the name given in turn 2, the constraint agreed in turn 5, gone.
+     Users experience it as the model getting worse over time. Three traps:</p>
+  <ul>
+    <li>N turns is not N tokens. One pasted stack trace makes a "short" window enormous — budget in tokens.</li>
+    <li>It breaks prompt caching. Caching keys on a stable prefix, and dropping the oldest turn changes that prefix on
+        every request. Evict in chunks (ten turns at once, not one) so invalidation is occasional rather than constant.</li>
+    <li>Cutting a <code>tool_use</code> away from its <code>tool_result</code> is an API error. The window has to be
+        tool-aware, not a plain <code>messages[-N:]</code>.</li>
+  </ul>
+
+  <h4>Rolling summary — compress older turns into a note</h4>
+  <p><strong>For:</strong> keeps the gist of the whole conversation for a fraction of the tokens, and degrades
+     gracefully instead of falling off a cliff. You choose what survives — decisions, constraints, identifiers, open
+     questions. It is just text at the front of the history, so it works with any provider.</p>
+  <p><strong>Against:</strong> an extra LLM call, so run it out of band at a threshold, never on the user's critical
+     path. Beyond that:</p>
+  <ul>
+    <li>Lossy and compounding. Summarising a summary drifts, and detail you did not know was load-bearing is gone at
+        step one and never comes back.</li>
+    <li>A hallucination in the summary is laundered into fact, then conditions every later turn.</li>
+    <li>Non-deterministic — the same conversation produces different histories, which makes failures hard to reproduce.</li>
+  </ul>
+  <p>Have an explicit policy: keep the last few turns verbatim, never summarise IDs, numbers or code, and structure the
+     summary (decisions / facts / open questions) rather than asking for free prose.</p>
+
+  <h4>Provider server-side compaction</h4>
+  <p><strong>For:</strong> the least code you own, and the provider handles the tool-call bookkeeping — the part people
+     get wrong. It is integrated with their caching and billing and maintained as models change. A sane default while
+     you learn what your conversations actually look like.</p>
+  <p><strong>Against:</strong> you give up control over what is kept and what is dropped, it does not port between
+     providers, and it is opaque and versioned by someone else — behaviour can change under you, and reproducing
+     locally or auditing exactly what the model saw is harder.</p>
+
+  <h4>Retrieval over history</h4>
+  <p>Store every turn, embed it, and fetch only the relevant ones per request. <strong>For:</strong> long-range recall
+     of specific facts, at a history size the other three cannot reach. <strong>Against:</strong> you have put a
+     retrieval pipeline inside your chat loop — more latency, more to evaluate, and a miss feels exactly like
+     forgetting. Lessons 8–12 cover doing this properly; do not reach for it first.</p>
+
+  <div class="note">
+    <strong>These compose, and production chat usually is a hybrid</strong>
+    The last few turns verbatim, a rolling summary of everything older, and retrieval when a specific old fact is
+    needed. Whichever you choose: budget in tokens rather than turns, trigger at a fraction of the context window
+    rather than at the limit, and keep the full raw transcript in your own store — compaction is a context strategy,
+    not a logging strategy. The system prompt sits outside all of this and is always resent.
+  </div>
 
   <h2>Streaming</h2>
   <p>Users judge a chat interface by time-to-first-token, not total time. Stream anything a human is waiting on.</p>

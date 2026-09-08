@@ -16,6 +16,105 @@
 
   <!-- Add notes below as sections. Newest at the top or the bottom, your call — keep it consistent. -->
 
+  <h2>Cheatsheets</h2>
+
+  <h3>What an AI engineer does</h3>
+  <ul>
+    <li><strong>Optimization of tokens</strong> — keeping the context small and deliberate: what goes in the prompt,
+        how much history is carried, how many retrieved chunks are worth their cost. Tokens drive billing, the context
+        window and latency, so this is where most tuning happens.</li>
+  </ul>
+
+  <h2>Token</h2>
+  <p>A <strong>token</strong> is the unit a model actually reads and writes. Text is not fed in as characters or words:
+     a tokenizer splits it into pieces from a fixed vocabulary — a common word is usually one token, a rare word breaks
+     into several, and punctuation and whitespace carry their own. The model predicts one token at a time, each one
+     chosen from a probability distribution over that vocabulary.</p>
+  <pre><code>"AI engineering"        →  ~3 tokens
+"unbelievability"       →  ~5 tokens
+"def chunk_text(text):" →  ~7 tokens
+
+rule of thumb (English): 1 token ≈ 4 characters ≈ 0.75 words
+                         1,000 words ≈ 1,300–1,500 tokens</code></pre>
+  <p>Why it matters: tokens are the unit of <strong>billing</strong>, of the <strong>context window</strong>, and of
+     <strong>latency</strong>. Every operational number in this job is counted in them.</p>
+  <p>Each model family tokenizes differently, so a count from one provider's tokenizer does not transfer to another —
+     use the provider's own counting endpoint (for Claude, <code>client.messages.count_tokens(...)</code>, which is free
+     and exact). Non-English text and code cost more tokens per character than English prose.</p>
+  <p>From <a href="03-llm-fundamentals.html">3. How LLMs actually behave</a>.</p>
+
+  <h2>OCR</h2>
+  <p><strong>Optical Character Recognition</strong> — turning an image of text into actual text. A scanned PDF, a photo
+     of a receipt or a screenshot is just pixels; OCR reads those pixels and gives back characters a program can search,
+     store and index. Classic tools are <code>tesseract</code> and the cloud document APIs.</p>
+  <p>Why it comes up here: a document pipeline has to get text out of whatever it is fed. A digital PDF has the text
+     inside it already; a <em>scanned</em> one does not, and without OCR it enters your index as an empty page.</p>
+  <p>The shift worth knowing: a multimodal model reads the page image itself, so you can hand a scanned invoice straight
+     to the model instead of running OCR first. That is often more accurate on messy layouts — tables, stamps,
+     handwriting — because the model sees the layout rather than a flattened stream of characters. It costs more per
+     page than <code>tesseract</code>, so the trade-off is accuracy and effort against price at volume.</p>
+  <p>From <a href="03-llm-fundamentals.html">3. How LLMs actually behave</a> and
+     <a href="10-ingestion-chunking.html">10. Ingestion and chunking</a>.</p>
+
+  <h2>Chain of thought</h2>
+  <p>Text the <strong>model generates</strong> — intermediate reasoning steps written out before the final answer, in
+     the same response. Not something the engineer implements in the app.</p>
+  <p>The mechanism is mundane: each token is predicted from everything before it, including what the model has just
+     written. Given room to write <em>"3 boxes, 7 items each, so 21…"</em>, the final answer is conditioned on those
+     intermediate tokens instead of being produced in one jump. That is why it helps on multi-step tasks.</p>
+  <p>What the engineer controls is <strong>eliciting</strong> it:</p>
+  <ul>
+    <li>Prompting for it — "work through it step by step", or asking for the reasoning inside a
+        <code>&lt;thinking&gt;</code> block that gets stripped before the user sees the answer.</li>
+    <li>Turning on the provider's extended thinking / reasoning effort, where the model does it natively and returns it
+        as a separate block.</li>
+  </ul>
+  <p><strong>Not to be confused with chaining.</strong> Splitting work across several LLM calls — classify, retrieve,
+     draft, check — is prompt chaining or an orchestration pipeline, and if the model picks the steps itself in a loop,
+     an agent. Both involve "steps", but at different levels: chain of thought lives inside one completion, chaining is
+     your code calling the model more than once.</p>
+  <p>Two consequences:</p>
+  <ul>
+    <li>It is billed as output tokens — straight into the token-optimization item above.</li>
+    <li>The visible reasoning is generated text, not a faithful log of the model's internals. Not an audit trail, and
+        not an explanation to show users as truth.</li>
+  </ul>
+  <p>From <a href="03-llm-fundamentals.html">3. How LLMs actually behave</a>.</p>
+
+  <h2>The four words, defined</h2>
+  <p>They get used loosely and interchangeably everywhere. They are not interchangeable, and each one sits on top of the
+     previous.</p>
+
+  <h3>LLM — large language model</h3>
+  <p>The model itself: a function that takes a sequence of tokens and predicts the next one, repeatedly, until it stops.
+     Claude, GPT, Gemini, Llama are LLMs. It has no memory between calls, no access to your data, and no ability to act
+     on the world. On its own it only produces text.</p>
+
+  <h3>API — application programming interface</h3>
+  <p>The contract you call to use something you did not build. In this course it usually means the HTTP endpoint the
+     model provider exposes: you send messages plus parameters, you get tokens back, you pay per token. The API is how
+     the LLM becomes usable from your code — it is plumbing, not intelligence.</p>
+
+  <h3>RAG — retrieval-augmented generation</h3>
+  <p>A technique for giving the model facts it was not trained on. Retrieve the relevant pieces of your own documents,
+     paste them into the prompt, then ask the question. The model does not learn anything — you are just putting the
+     right context in front of it at the right moment.</p>
+  <pre><code>question  →  retrieve relevant chunks  →  stuff them in the prompt  →  LLM answers</code></pre>
+
+  <h3>Agent</h3>
+  <p>An LLM in a loop, with tools, deciding for itself what to do next. Instead of answering once, it calls a tool, reads
+     the result, and decides whether to call another or to stop. The loop and the tools are ordinary code you write; the
+     model only chooses the next step.</p>
+  <pre><code>while not done:
+    model picks a tool  →  your code runs it  →  result goes back into context</code></pre>
+
+  <div class="note">
+    <strong>How they stack up</strong>
+    The <em>LLM</em> is the engine. The <em>API</em> is how you reach it. <em>RAG</em> is one thing you put into the
+    prompt. An <em>agent</em> is what you get when the model is allowed to choose its next move — and RAG is often just
+    one of the tools it can choose.
+  </div>
+
 </main>
 </div>
 <script src="../assets/courses.js"></script>
