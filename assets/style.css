@@ -199,14 +199,14 @@ th { background: var(--surface); }
   .menu-btn { display: block; }
 }
 
-/* ---------- sidebar: the notes page, kept apart from the lesson list ---------- */
+/* ---------- sidebar: your own pages, kept apart from the lesson list ---------- */
 .sidebar-extra {
   margin-top: 14px;
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
 .sidebar-extra h2 { margin: 2px 6px 6px; }
-.notes-link {
+.sidebar-extra a {
   display: block;
   padding: 6px 10px;
   border-radius: 6px;
@@ -215,5 +215,14 @@ th { background: var(--surface); }
   font-size: 14px;
   font-weight: 600;
 }
-.notes-link:hover { background: var(--accent-soft); }
-.notes-link.active { background: var(--accent-soft); color: var(--accent); }
+.sidebar-extra a:hover { background: var(--accent-soft); }
+.sidebar-extra a.active { background: var(--accent-soft); color: var(--accent); }
+
+/* ---------- a spoken answer on the interview page ---------- */
+blockquote {
+  margin: 12px 0 20px;
+  padding: 2px 18px;
+  border-left: 3px solid var(--accent);
+  background: var(--surface);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}

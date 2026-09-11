@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interview questions — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="interview.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Interview questions</h1>
+  <p class="lead">What an interviewer is likely to ask about AI engineering, an answer worth saying out loud, and the
+     follow-ups that come after it. Practise saying them, not reading them.</p>
+
+  <!-- One h2 per question: the answer in a <blockquote>, then a table of follow-ups. -->
+
+  <h2>How do embeddings work?</h2>
+  <h3>The answer (about 40 seconds)</h3>
+  <blockquote>
+    <p>An embedding is a list of numbers that represents the meaning of a piece of text. You send text to an embedding
+       model and it returns a fixed-length vector — a few hundred to a few thousand numbers. It's trained so that texts
+       with similar meaning come out pointing in similar directions.</p>
+    <p>That's the whole trick: once meaning is a direction in space, comparing meaning becomes geometry. You measure the
+       angle between two vectors — cosine similarity — and that number tells you how related they are.</p>
+    <p>It's why semantic search beats keywords. Someone searching "how do I cancel" won't match a page titled
+       "terminating your subscription" — zero words in common — but their vectors land close together.</p>
+    <p>In practice I embed every chunk once at ingestion and store the vectors in pgvector, then embed the incoming
+       question and ask the database for the nearest ones.</p>
+  </blockquote>
+
+  <h3>The follow-ups</h3>
+  <table>
+    <tr><th>They ask</th><th>You say</th></tr>
+    <tr><td>How does the model learn that?</td>
+        <td>It's trained on pairs of texts that should be related, and pushed to put those close together and unrelated
+            ones far apart. I use them, I don't train them.</td></tr>
+    <tr><td>So why use keyword search at all?</td>
+        <td>Embeddings are bad at exact tokens: product codes, error numbers, rare names. That's why I run hybrid —
+            vector plus BM25 — and fuse the results. <em>(Then give your recall number.)</em></td></tr>
+    <tr><td>How did you pick the embedding model?</td>
+        <td>I measured recall on my own labelled set rather than trusting a leaderboard. Dimension size is a
+            cost/quality trade-off, not automatically better when bigger.</td></tr>
+    <tr><td>What are the failure modes?</td>
+        <td>Negation is weak: "contract includes indemnity" and "excludes indemnity" embed almost identically. And you
+            must use the same model for indexing and querying, or the vectors aren't comparable — changing it means
+            re-indexing everything.</td></tr>
+  </table>
+  <p>From <a href="08-embeddings.html">8. Embeddings and similarity</a> and
+     <a href="12-advanced-retrieval.html">12. Retrieval that actually works</a>.</p>
+
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>

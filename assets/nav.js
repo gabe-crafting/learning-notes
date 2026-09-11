@@ -2,16 +2,18 @@
    A page only declares where it is:
      <body data-root="../" data-course="java" data-page="05-control-flow.html">
    Course index pages omit data-page. The site home omits both.
-   Every course also has a notes page at <course>/notes.html — it is not a lesson,
-   so it sits in its own block under the lesson list and closes the pager. */
+   Every course folder also holds pages of your own (YOURS below). They are not lessons,
+   so they sit in their own block under the lesson list and follow the last lesson in the pager. */
 (function () {
   var body = document.body;
   var root = body.dataset.root || "";
   var courseId = body.dataset.course;
   var pageFile = body.dataset.page;
   var course = (window.COURSES || []).filter(function (c) { return c.id === courseId; })[0];
-  var NOTES = "notes.html";
-  var onNotes = pageFile === NOTES;
+  var YOURS = [
+    { file: "notes.html",     title: "Notes" },
+    { file: "interview.html", title: "Interview questions" }
+  ];
 
   function el(tag, attrs, children) {
     var node = document.createElement(tag);
@@ -25,21 +27,20 @@
   }
   function href(file) { return root + course.path + "/" + file; }
 
+  /* every page of the course in reading order: lessons, then your own pages */
+  var sequence = course ? course.lessons.concat(YOURS) : [];
+  var idx = -1;
+  sequence.forEach(function (p, i) { if (p.file === pageFile) { idx = i; } });
+
   /* ---- top bar ---- */
   var bar = el("div", { class: "topbar" });
   bar.appendChild(el("a", { href: root + "index.html", text: "Learning" }));
   if (course) {
     bar.appendChild(el("span", { class: "sep", text: "/" }));
     bar.appendChild(el("a", { href: href("index.html"), text: course.title }));
-    if (onNotes) {
+    if (idx > -1) {
       bar.appendChild(el("span", { class: "sep", text: "/" }));
-      bar.appendChild(el("span", { class: "crumb", text: "Notes" }));
-    } else if (pageFile) {
-      var current = course.lessons.filter(function (l) { return l.file === pageFile; })[0];
-      if (current) {
-        bar.appendChild(el("span", { class: "sep", text: "/" }));
-        bar.appendChild(el("span", { class: "crumb", text: current.title }));
-      }
+      bar.appendChild(el("span", { class: "crumb", text: sequence[idx].title }));
     }
   }
   var btn = el("button", { class: "menu-btn", type: "button", text: "Lessons" });
@@ -51,7 +52,7 @@
   var mount = document.getElementById("topbar");
   if (mount) { mount.replaceWith(bar); } else { body.insertBefore(bar, body.firstChild); }
 
-  /* ---- sidebar: lessons, then notes in its own block ---- */
+  /* ---- sidebar: lessons, then your own pages in a separate block ---- */
   var sidebar = document.getElementById("sidebar");
   if (sidebar && course) {
     sidebar.appendChild(el("h2", { text: course.title }));
@@ -63,10 +64,11 @@
     });
     sidebar.appendChild(list);
 
-    sidebar.appendChild(el("div", { class: "sidebar-extra" }, [
-      el("h2", { text: "Yours" }),
-      el("a", { class: "notes-link" + (onNotes ? " active" : ""), href: href(NOTES), text: "Notes" })
-    ]));
+    var yours = el("div", { class: "sidebar-extra" }, [el("h2", { text: "Yours" })]);
+    YOURS.forEach(function (p) {
+      yours.appendChild(el("a", { class: p.file === pageFile ? "active" : "", href: href(p.file), text: p.title }));
+    });
+    sidebar.appendChild(yours);
   }
 
   /* ---- generated card grids ---- */
@@ -94,29 +96,14 @@
   /* ---- prev / next pager ---- */
   var main = document.querySelector("main");
   if (main && course) {
-    var idx = -1;
-    course.lessons.forEach(function (l, i) { if (l.file === pageFile) { idx = i; } });
-    var last = course.lessons[course.lessons.length - 1];
-    var prev = null;
-    var next = null;
-
-    if (onNotes) {
-      prev = last ? { file: last.file, title: last.title } : null;
-    } else if (idx > 0) {
-      prev = course.lessons[idx - 1];
-      next = course.lessons[idx + 1] || { file: NOTES, title: "Notes" };
-    } else if (idx === 0) {
-      next = course.lessons[1] || { file: NOTES, title: "Notes" };
-    } else {
-      next = course.lessons[0];
-    }
-
+    var prev = idx > 0 ? sequence[idx - 1] : null;
+    var next = idx === -1 ? sequence[0] : sequence[idx + 1];
     var pager = el("nav", { class: "pager" });
     if (prev) {
       pager.appendChild(el("a", { href: href(prev.file) }, [
         el("span", { text: "Previous" }), el("strong", { text: prev.title })
       ]));
-    } else if (idx > -1 || onNotes) {
+    } else if (idx > -1) {
       pager.appendChild(el("a", { href: href("index.html") }, [
         el("span", { text: "Back to" }), el("strong", { text: course.title + " overview" })
       ]));
