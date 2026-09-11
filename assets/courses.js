@@ -82,7 +82,8 @@ window.COURSES = [
       { file: "18-security-guardrails.html", title: "Security and guardrails",       desc: "Prompt injection, PII, output validation, sandboxing tools." },
       { file: "19-open-models-finetuning.html", title: "Open models and fine-tuning", desc: "Hugging Face, local inference, and when fine-tuning beats RAG." },
       { file: "20-serving-deploying.html",   title: "Serving and deploying",         desc: "FastAPI, streaming to the browser, queues, Docker, rate limits." },
-      { file: "21-projects-and-plan.html",   title: "Portfolio projects and a plan", desc: "Three projects worth showing, and an 8-week schedule." }
+      { file: "21-projects-and-plan.html",   title: "Portfolio projects and a plan", desc: "Three projects worth showing, and an 8-week schedule." },
+      { file: "22-interview-answers.html",   title: "Interview answers",             desc: "Rehearsed answers to the questions you must handle cold." }
     ]
   }
 ];

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interview answers — AI Engineering</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body data-root="../" data-course="ai-engineering" data-page="22-interview-answers.html">
+<div id="topbar"></div>
+<div class="layout">
+<nav class="sidebar" id="sidebar"></nav>
+<main>
+  <h1>Interview answers</h1>
+  <p class="lead">Answers written out the way they should be said, not the way a textbook would write them. One
+     section per question: the spoken answer, the follow-ups it invites, and the number to finish on.</p>
+
+  <div class="note">
+    <strong>How to use this page</strong>
+    Rehearse each one out loud until it sounds like talking, not reciting — an answer that is obviously memorised
+    reads worse than a rough one. Keep them short: sixty seconds is plenty, and a crisp answer invites a better
+    follow-up question than a rambling one. Every answer should end on something you actually built, with a number
+    in it. The question list comes from <a href="21-projects-and-plan.html">lesson 21</a>.
+  </div>
+
+  <h2>How do embeddings work?</h2>
+
+  <div class="note">
+    <strong>Say this — about 40 seconds</strong>
+    <p>An embedding is a list of numbers that represents the meaning of a piece of text. You send text to an
+       embedding model and it returns a fixed-length vector — a few hundred to a few thousand numbers. It is trained
+       so that texts with similar meaning come out pointing in similar directions.</p>
+    <p>That is the whole trick: once meaning is a direction in space, comparing meaning becomes geometry. You measure
+       the angle between two vectors — cosine similarity — and that number tells you how related they are.</p>
+    <p>It is why semantic search beats keywords. Someone searching "how do I cancel" will not match a page titled
+       "terminating your subscription" — zero words in common — but their vectors land close together.</p>
+    <p>In practice I embed every chunk once at ingestion and store the vectors in pgvector, then embed the incoming
+       question and ask the database for the nearest ones.</p>
+  </div>
+
+  <h3>The follow-ups it invites</h3>
+  <table>
+    <tr><th>If they ask</th><th>Say</th></tr>
+    <tr>
+      <td>How does the model learn that?</td>
+      <td>It is trained on pairs of texts that should be related, and pushed to put those close together and unrelated
+          ones far apart. I use embedding models, I do not train them.</td>
+    </tr>
+    <tr>
+      <td>So why use keyword search at all?</td>
+      <td>Embeddings are bad at exact tokens — product codes, error numbers, rare names. That is why I run hybrid:
+          vector plus BM25, fused with RRF.</td>
+    </tr>
+    <tr>
+      <td>How did you pick the embedding model?</td>
+      <td>I measured recall on my own labelled set rather than trusting a leaderboard. More dimensions is a cost and
+          storage tradeoff, not automatically better.</td>
+    </tr>
+    <tr>
+      <td>What are the failure modes?</td>
+      <td>Negation is weak — "contract includes indemnity" and "excludes indemnity" embed almost identically. And the
+          same model has to be used for indexing and querying, or the vectors are not comparable; changing it means
+          re-indexing everything.</td>
+    </tr>
+    <tr>
+      <td>What does the similarity score mean?</td>
+      <td>It ranks, it does not grade. 0.82 is not "82% relevant" — the distribution differs per model and per corpus,
+          so any cutoff has to be calibrated on your own data.</td>
+    </tr>
+  </table>
+
+  <h3>Land on a number</h3>
+  <p>Finish with something measured rather than something read: <em>"on my project, recall@5 was 0.61 with vectors
+     alone and 0.84 once I added BM25."</em> That turns a definition into experience, and usually ends the questioning
+     there.</p>
+
+  <div class="warn">
+    <strong>Do not oversell the maths</strong>
+    Claiming to know how the embedding model is trained internally invites exactly the question you cannot answer.
+    "I use them, I do not train them" is a strong answer, not a weak one — it is the honest line between AI
+    engineering and ML engineering, and the interviewer is usually checking that you know where it sits.
+  </div>
+
+  <div class="task">
+    <strong>Still to write</strong>
+    <p>The rest of the cold-answer list from lesson 21. Write each one the same way — spoken answer, follow-ups, a
+       number from your own work — after you have built the thing you would cite.</p>
+    <ol>
+      <li>What is the difference between an AI engineer and an ML engineer?</li>
+      <li>Explain RAG to a non-technical stakeholder. Now explain why it is not always the answer.</li>
+      <li>How do you chunk documents, and how did you choose the size?</li>
+      <li>Your RAG system gives a wrong answer. Walk me through debugging it.</li>
+      <li>How do you know a prompt change made things better?</li>
+      <li>What is prompt injection, and how would you defend an agent that reads customer emails?</li>
+      <li>When would you fine-tune rather than use RAG?</li>
+      <li>How do you control cost in an LLM product?</li>
+      <li>What is the difference between a workflow and an agent, and which have you shipped?</li>
+      <li>How would you evaluate an agent when several paths are valid?</li>
+    </ol>
+  </div>
+</main>
+</div>
+<script src="../assets/courses.js"></script>
+<script src="../assets/nav.js"></script>
+</body>
+</html>
